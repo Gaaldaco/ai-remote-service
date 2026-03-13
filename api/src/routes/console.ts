@@ -22,7 +22,7 @@ const client = process.env.ANTHROPIC_API_KEY
 
 // GET /:agentId/messages - last 100 messages
 router.get("/:agentId/messages", async (req, res) => {
-  const { agentId } = req.params;
+  const agentId = req.params.agentId as string;
 
   const messages = await db
     .select()
@@ -36,7 +36,7 @@ router.get("/:agentId/messages", async (req, res) => {
 
 // POST /:agentId/send - send a message (user chat or command)
 router.post("/:agentId/send", async (req, res) => {
-  const { agentId } = req.params;
+  const agentId = req.params.agentId as string;
   const { message } = req.body;
 
   if (!message || typeof message !== "string") {
@@ -208,7 +208,7 @@ ${message}`;
 
 // POST /:agentId/command-output - agent reports command output
 router.post("/:agentId/command-output", agentAuth, async (req, res) => {
-  const { agentId } = req.params;
+  const agentId = req.params.agentId as string;
   const { remediationId, output, success } = req.body;
 
   if (!remediationId || output === undefined) {
