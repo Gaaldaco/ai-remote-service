@@ -2,8 +2,9 @@
 set -e
 
 # AI Remote Agent Installer
-# Run as root: curl -sSL https://YOUR_API_URL/install.sh | sudo bash
+# Run: curl -sSL https://api-production-64cc.up.railway.app/install.sh | bash
 
+API_URL="https://api-production-64cc.up.railway.app"
 REPO="Gaaldaco/ai-remote-service"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/ai-remote-agent"
@@ -16,7 +17,7 @@ echo ""
 
 # Check root
 if [ "$EUID" -ne 0 ]; then
-  echo "Error: Please run as root (sudo bash install.sh)"
+  echo "Error: Please run as root"
   exit 1
 fi
 
@@ -35,79 +36,47 @@ case $ARCH in
     ;;
 esac
 
-echo "Detected architecture: $ARCH ($BINARY_SUFFIX)"
+echo "Architecture: $ARCH ($BINARY_SUFFIX)"
+echo "API: $API_URL"
+echo ""
 
-# Download latest binary from GitHub releases
-echo "Downloading latest agent binary..."
+# Download latest binary
+echo "Downloading agent binary..."
 LATEST_URL="https://github.com/${REPO}/releases/latest/download/${BINARY_NAME}-${BINARY_SUFFIX}"
-
-if command -v curl &> /dev/null; then
-  HTTP_CODE=$(curl -sL -w "%{http_code}" -o "/tmp/${BINARY_NAME}" "$LATEST_URL")
-  if [ "$HTTP_CODE" != "200" ]; then
-    echo "Error: Failed to download binary (HTTP $HTTP_CODE)"
-    echo "URL: $LATEST_URL"
-    echo "Make sure a release exists at https://github.com/${REPO}/releases"
-    exit 1
-  fi
-elif command -v wget &> /dev/null; then
-  wget -q -O "/tmp/${BINARY_NAME}" "$LATEST_URL" || {
-    echo "Error: Failed to download binary"
-    exit 1
-  }
-else
-  echo "Error: curl or wget required"
+HTTP_CODE=$(curl -sL -w "%{http_code}" -o "/tmp/${BINARY_NAME}" "$LATEST_URL")
+if [ "$HTTP_CODE" != "200" ]; then
+  echo "Error: Failed to download binary (HTTP $HTTP_CODE)"
   exit 1
 fi
-
 echo "Download complete."
+echo ""
 
-# Prompt for API URL and key
-read -p "API URL (e.g., https://your-api.up.railway.app): " API_URL
-if [ -z "$API_URL" ]; then
-  echo "Error: API URL is required"
-  exit 1
-fi
-
-read -p "Agent Name (e.g., web-server-01): " AGENT_NAME
+# Agent name
+read -p "Agent Name [$(hostname)]: " AGENT_NAME
 if [ -z "$AGENT_NAME" ]; then
   AGENT_NAME=$(hostname)
 fi
 
+# Register with API
 echo ""
-echo "The agent needs to register with the API to get an API key."
-echo "You can either:"
-echo "  1) Register now (requires API to be accessible)"
-echo "  2) Provide an existing API key"
-echo ""
-read -p "Choose (1 or 2): " CHOICE
+echo "Registering agent with API..."
+RESPONSE=$(curl -s -X POST "${API_URL}/api/agents/register" \
+  -H "Content-Type: application/json" \
+  -d "{\"name\": \"${AGENT_NAME}\", \"hostname\": \"$(hostname)\", \"os\": \"$(uname -o)\", \"arch\": \"${ARCH}\", \"platform\": \"linux\"}")
 
-API_KEY=""
-if [ "$CHOICE" = "1" ]; then
-  echo "Registering agent..."
-  RESPONSE=$(curl -s -X POST "${API_URL}/api/agents/register" \
-    -H "Content-Type: application/json" \
-    -d "{\"name\": \"${AGENT_NAME}\", \"hostname\": \"$(hostname)\", \"os\": \"$(uname -o)\", \"arch\": \"${ARCH}\", \"platform\": \"linux\"}")
+API_KEY=$(echo "$RESPONSE" | grep -o '"apiKey":"[^"]*"' | cut -d'"' -f4)
+AGENT_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
 
-  API_KEY=$(echo "$RESPONSE" | grep -o '"apiKey":"[^"]*"' | cut -d'"' -f4)
-  AGENT_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
-
-  if [ -z "$API_KEY" ]; then
-    echo "Error: Registration failed. Response: $RESPONSE"
-    exit 1
-  fi
-
-  echo "Registered! Agent ID: $AGENT_ID"
-  echo "API Key: $API_KEY"
-  echo ""
-  echo "IMPORTANT: Save this API key — it will NOT be shown again."
-  echo ""
-else
-  read -p "API Key: " API_KEY
-  if [ -z "$API_KEY" ]; then
-    echo "Error: API key is required"
-    exit 1
-  fi
+if [ -z "$API_KEY" ]; then
+  echo "Error: Registration failed. Response: $RESPONSE"
+  exit 1
 fi
+
+echo "Registered! Agent ID: $AGENT_ID"
+echo ""
+echo "  API Key: $API_KEY"
+echo "  SAVE THIS KEY — it will NOT be shown again."
+echo ""
 
 # Create directories
 mkdir -p "$CONFIG_DIR"
@@ -124,7 +93,7 @@ api_key: "${API_KEY}"
 agent_name: "${AGENT_NAME}"
 snapshot_interval: 60
 heartbeat_interval: 30
-command_poll_interval: 10
+command_poll_interval: 5
 EOF
 
 chmod 600 "${CONFIG_DIR}/config.yaml"
