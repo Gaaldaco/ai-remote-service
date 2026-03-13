@@ -8,6 +8,9 @@ const client = process.env.ANTHROPIC_API_KEY
   ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
   : null;
 
+const HAIKU_MODEL = "claude-haiku-4-5-20251001";
+const SONNET_MODEL = "claude-sonnet-4-20250514";
+
 export interface AIAnalysisResult {
   healthScore: number;
   summary: string;
@@ -18,6 +21,12 @@ export interface AIAnalysisResult {
     suggestedCommand: string | null;
     matchesKnownPattern: string | null;
   }>;
+}
+
+function needsEscalation(result: AIAnalysisResult): boolean {
+  if (result.healthScore < 40) return true;
+  if (result.issues.some((i) => i.severity === "critical")) return true;
+  return false;
 }
 
 export async function analyzeSnapshot(
@@ -79,13 +88,45 @@ Respond with ONLY valid JSON (no markdown):
   ]
 }`;
 
+  // Initial analysis with Haiku
+  let model = HAIKU_MODEL;
   const response = await client.messages.create({
-    model: "claude-sonnet-4-20250514",
+    model,
     max_tokens: 2000,
     messages: [{ role: "user", content: prompt }],
   });
 
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
-  return JSON.parse(text) as AIAnalysisResult;
+  const result = JSON.parse(text) as AIAnalysisResult;
+
+  console.log(`[claude] Analysis by ${model}`);
+
+  // Escalate to Sonnet if critical issues or low health score
+  if (needsEscalation(result)) {
+    model = SONNET_MODEL;
+    console.log(`[claude] Escalating to ${model} (healthScore=${result.healthScore}, critical issues found)`);
+
+    const escalatedResponse = await client.messages.create({
+      model,
+      max_tokens: 2000,
+      messages: [
+        {
+          role: "user",
+          content: `ESCALATED: A preliminary analysis found critical issues. Provide a deeper, more thorough analysis.\n\n${prompt}`,
+        },
+      ],
+    });
+
+    const escalatedText =
+      escalatedResponse.content[0].type === "text"
+        ? escalatedResponse.content[0].text
+        : "";
+    const escalatedResult = JSON.parse(escalatedText) as AIAnalysisResult;
+
+    console.log(`[claude] Analysis by ${model}`);
+    return escalatedResult;
+  }
+
+  return result;
 }

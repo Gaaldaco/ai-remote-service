@@ -141,6 +141,27 @@ export const remediationLog = pgTable("remediation_log", {
   executedAt: timestamp("executed_at").defaultNow().notNull(),
 });
 
+// ─── Console Messages ───────────────────────────────────────────────────────
+
+export const consoleRoleEnum = pgEnum("console_role", [
+  "user",
+  "assistant",
+  "command",
+  "output",
+]);
+
+export const consoleMessages = pgTable("console_messages", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  agentId: uuid("agent_id")
+    .notNull()
+    .references(() => agents.id, { onDelete: "cascade" }),
+  role: consoleRoleEnum("role").notNull(),
+  content: text("content").notNull(),
+  model: text("model"),
+  remediationId: uuid("remediation_id").references(() => remediationLog.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // ─── Audit Log ───────────────────────────────────────────────────────────────
 
 export const auditLog = pgTable("audit_log", {

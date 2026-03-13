@@ -10,6 +10,7 @@ import alertsRouter from "./routes/alerts.js";
 import servicesRouter from "./routes/services.js";
 import knowledgeBaseRouter from "./routes/knowledgeBase.js";
 import remediationRouter from "./routes/remediation.js";
+import consoleRouter from "./routes/console.js";
 import { errorHandler } from "./middleware/error.js";
 import { startHeartbeatMonitor } from "./lib/heartbeat.js";
 
@@ -69,6 +70,7 @@ app.use("/api/alerts", alertsRouter);
 app.use("/api/services", servicesRouter);
 app.use("/api/knowledge-base", knowledgeBaseRouter);
 app.use("/api/remediation", remediationRouter);
+app.use("/api/console", consoleRouter);
 
 // ─── Error handler ───────────────────────────────────────────────────────────
 app.use(errorHandler);

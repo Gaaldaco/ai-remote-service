@@ -9,7 +9,7 @@ import {
   alerts,
   remediationLog,
 } from "../db/schema.js";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { analyzeSnapshot } from "../lib/claude.js";
 
 const redisUrl =
@@ -119,13 +119,33 @@ const worker = new Worker(
       const shouldAutoRemediate =
         matchedKb?.autoApply && agent.autoRemediate && issue.suggestedCommand;
 
+      // Check for existing unresolved alert with same type and message
+      const alertType = mapCategoryToAlertType(issue.category);
+      const [existingAlert] = await db
+        .select()
+        .from(alerts)
+        .where(
+          and(
+            eq(alerts.agentId, agent.id),
+            eq(alerts.type, alertType),
+            eq(alerts.message, issue.description),
+            eq(alerts.resolved, false)
+          )
+        )
+        .limit(1);
+
+      if (existingAlert) {
+        console.log(`[worker] Skipping duplicate alert: ${issue.description}`);
+        continue;
+      }
+
       // Create alert
       const [alert] = await db
         .insert(alerts)
         .values({
           agentId: agent.id,
           snapshotId,
-          type: mapCategoryToAlertType(issue.category),
+          type: alertType,
           severity: issue.severity,
           message: issue.description,
           details: {
@@ -159,13 +179,32 @@ const worker = new Worker(
       );
 
       if (!svc || svc.status === "failed" || svc.status === "stopped") {
-        // Check if there's already an unresolved alert for this
+        const serviceMessage = `Monitored service "${mon.serviceName}" is ${svc?.status ?? "not found"} on ${agent.hostname}`;
+
+        const [existingServiceAlert] = await db
+          .select()
+          .from(alerts)
+          .where(
+            and(
+              eq(alerts.agentId, agent.id),
+              eq(alerts.type, "service_down"),
+              eq(alerts.message, serviceMessage),
+              eq(alerts.resolved, false)
+            )
+          )
+          .limit(1);
+
+        if (existingServiceAlert) {
+          console.log(`[worker] Skipping duplicate service alert: ${serviceMessage}`);
+          continue;
+        }
+
         await db.insert(alerts).values({
           agentId: agent.id,
           snapshotId,
           type: "service_down",
           severity: "critical",
-          message: `Monitored service "${mon.serviceName}" is ${svc?.status ?? "not found"} on ${agent.hostname}`,
+          message: serviceMessage,
         });
       }
     }

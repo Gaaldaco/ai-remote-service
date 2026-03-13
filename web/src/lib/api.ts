@@ -61,6 +61,14 @@ export const api = {
     delete: (id: string) =>
       request<{ deleted: boolean }>(`/api/knowledge-base/${id}`, { method: 'DELETE' }),
   },
+  console: {
+    messages: (agentId: string) =>
+      request<ConsoleMessage[]>(`/api/console/${agentId}/messages`),
+    send: (agentId: string, message: string) =>
+      request<ConsoleSendResponse>(`/api/console/${agentId}/send`, {
+        method: 'POST', body: JSON.stringify({ message }),
+      }),
+  },
   remediation: {
     log: (params?: { agentId?: string; limit?: number }) => {
       const qs = new URLSearchParams();
@@ -177,6 +185,23 @@ export interface KBEntry {
   autoApply: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ConsoleMessage {
+  id: string;
+  agentId: string;
+  role: 'user' | 'assistant' | 'command' | 'output';
+  content: string;
+  model: string | null;
+  remediationId: string | null;
+  createdAt: string;
+}
+
+export interface ConsoleSendResponse {
+  type: 'chat' | 'command';
+  message: string;
+  model?: string;
+  remediationId?: string;
 }
 
 export interface RemediationEntry {

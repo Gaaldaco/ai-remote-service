@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type Snapshot, type MonitoredService } from '@/lib/api';
 import StatusBadge from '@/components/StatusBadge';
@@ -110,6 +110,13 @@ export default function AgentDetail() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <Link
+            to={`/agents/${id}/console`}
+            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 flex items-center gap-1"
+          >
+            <Terminal className="w-4 h-4" />
+            Live Console
+          </Link>
           <button
             onClick={() => toggleAutoRemediate.mutate()}
             className={clsx(
