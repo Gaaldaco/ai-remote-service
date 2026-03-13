@@ -1,0 +1,17 @@
+[Unit]
+Description=AI Remote Service Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ai-remote-agent
+Restart=always
+RestartSec=10
+User=root
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-remote-agent
+
+[Install]
+WantedBy=multi-user.target

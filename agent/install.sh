@@ -1,0 +1,128 @@
+#!/bin/bash
+set -e
+
+# AI Remote Agent Installer
+# Run as root: sudo bash install.sh
+
+INSTALL_DIR="/usr/local/bin"
+CONFIG_DIR="/etc/ai-remote-agent"
+LOG_DIR="/var/log/ai-remote-agent"
+SERVICE_FILE="/etc/systemd/system/ai-remote-agent.service"
+BINARY_NAME="ai-remote-agent"
+
+echo "=== AI Remote Agent Installer ==="
+echo ""
+
+# Check root
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: Please run as root (sudo bash install.sh)"
+  exit 1
+fi
+
+# Detect architecture
+ARCH=$(uname -m)
+case $ARCH in
+  x86_64)
+    BINARY_SUFFIX="linux-amd64"
+    ;;
+  aarch64|arm64)
+    BINARY_SUFFIX="linux-arm64"
+    ;;
+  *)
+    echo "Error: Unsupported architecture: $ARCH"
+    exit 1
+    ;;
+esac
+
+# Prompt for API URL and key
+read -p "API URL (e.g., https://your-api.up.railway.app): " API_URL
+if [ -z "$API_URL" ]; then
+  echo "Error: API URL is required"
+  exit 1
+fi
+
+read -p "Agent Name (e.g., web-server-01): " AGENT_NAME
+if [ -z "$AGENT_NAME" ]; then
+  AGENT_NAME=$(hostname)
+fi
+
+echo ""
+echo "The agent needs to register with the API to get an API key."
+echo "You can either:"
+echo "  1) Register now (requires API to be accessible)"
+echo "  2) Provide an existing API key"
+echo ""
+read -p "Choose (1 or 2): " CHOICE
+
+API_KEY=""
+if [ "$CHOICE" = "1" ]; then
+  echo "Registering agent..."
+  RESPONSE=$(curl -s -X POST "${API_URL}/api/agents/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\": \"${AGENT_NAME}\", \"hostname\": \"$(hostname)\", \"os\": \"$(uname -o)\", \"arch\": \"${ARCH}\", \"platform\": \"linux\"}")
+
+  API_KEY=$(echo "$RESPONSE" | grep -o '"apiKey":"[^"]*"' | cut -d'"' -f4)
+  AGENT_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+
+  if [ -z "$API_KEY" ]; then
+    echo "Error: Registration failed. Response: $RESPONSE"
+    exit 1
+  fi
+
+  echo "Registered! Agent ID: $AGENT_ID"
+  echo "API Key: $API_KEY"
+  echo ""
+  echo "IMPORTANT: Save this API key — it will NOT be shown again."
+  echo ""
+else
+  read -p "API Key: " API_KEY
+  if [ -z "$API_KEY" ]; then
+    echo "Error: API key is required"
+    exit 1
+  fi
+fi
+
+# Create directories
+mkdir -p "$CONFIG_DIR"
+mkdir -p "$LOG_DIR"
+
+# Check if binary exists in current directory
+if [ -f "./bin/${BINARY_NAME}-${BINARY_SUFFIX}" ]; then
+  cp "./bin/${BINARY_NAME}-${BINARY_SUFFIX}" "${INSTALL_DIR}/${BINARY_NAME}"
+elif [ -f "./${BINARY_NAME}" ]; then
+  cp "./${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+else
+  echo "Error: Binary not found. Build it first with: make build-linux"
+  echo "Or place ${BINARY_NAME}-${BINARY_SUFFIX} in ./bin/"
+  exit 1
+fi
+
+chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
+
+# Write config
+cat > "${CONFIG_DIR}/config.yaml" <<EOF
+api_url: "${API_URL}"
+api_key: "${API_KEY}"
+agent_name: "${AGENT_NAME}"
+snapshot_interval: 60
+heartbeat_interval: 30
+command_poll_interval: 10
+EOF
+
+chmod 600 "${CONFIG_DIR}/config.yaml"
+
+# Install systemd service
+cp ./ai-remote-agent.service "$SERVICE_FILE"
+
+# Enable and start
+systemctl daemon-reload
+systemctl enable ai-remote-agent
+systemctl start ai-remote-agent
+
+echo ""
+echo "=== Installation Complete ==="
+echo "Binary:  ${INSTALL_DIR}/${BINARY_NAME}"
+echo "Config:  ${CONFIG_DIR}/config.yaml"
+echo "Logs:    journalctl -u ai-remote-agent -f"
+echo "Status:  systemctl status ai-remote-agent"
+echo ""
