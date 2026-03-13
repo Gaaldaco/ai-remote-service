@@ -64,9 +64,15 @@ export const api = {
   console: {
     messages: (agentId: string) =>
       request<ConsoleMessage[]>(`/api/console/${agentId}/messages`),
-    send: (agentId: string, message: string) =>
-      request<ConsoleSendResponse>(`/api/console/${agentId}/send`, {
-        method: 'POST', body: JSON.stringify({ message }),
+    execute: (agentId: string, command: string) =>
+      request<{ id: string; status: string }>(`/api/console/${agentId}/execute`, {
+        method: 'POST', body: JSON.stringify({ command }),
+      }),
+    result: (agentId: string, remediationId: string) =>
+      request<{ status: string; output?: string; success?: boolean }>(`/api/console/${agentId}/result/${remediationId}`),
+    ask: (agentId: string, message: string, terminalHistory: string) =>
+      request<{ response: string; model: string; suggestion?: { command: string; reason: string } }>(`/api/console/${agentId}/ask`, {
+        method: 'POST', body: JSON.stringify({ message, terminalHistory }),
       }),
   },
   remediation: {
@@ -195,13 +201,6 @@ export interface ConsoleMessage {
   model: string | null;
   remediationId: string | null;
   createdAt: string;
-}
-
-export interface ConsoleSendResponse {
-  type: 'chat' | 'command';
-  message: string;
-  model?: string;
-  remediationId?: string;
 }
 
 export interface RemediationEntry {

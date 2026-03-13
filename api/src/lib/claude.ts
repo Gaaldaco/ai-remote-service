@@ -11,6 +11,13 @@ const client = process.env.ANTHROPIC_API_KEY
 const HAIKU_MODEL = "claude-haiku-4-5-20251001";
 const SONNET_MODEL = "claude-sonnet-4-20250514";
 
+function extractJSON(text: string): string {
+  // Strip markdown code fences if present
+  const match = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  if (match) return match[1].trim();
+  return text.trim();
+}
+
 export interface AIAnalysisResult {
   healthScore: number;
   summary: string;
@@ -98,7 +105,7 @@ Respond with ONLY valid JSON (no markdown):
 
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
-  const result = JSON.parse(text) as AIAnalysisResult;
+  const result = JSON.parse(extractJSON(text)) as AIAnalysisResult;
 
   console.log(`[claude] Analysis by ${model}`);
 
@@ -122,7 +129,7 @@ Respond with ONLY valid JSON (no markdown):
       escalatedResponse.content[0].type === "text"
         ? escalatedResponse.content[0].text
         : "";
-    const escalatedResult = JSON.parse(escalatedText) as AIAnalysisResult;
+    const escalatedResult = JSON.parse(extractJSON(escalatedText)) as AIAnalysisResult;
 
     console.log(`[claude] Analysis by ${model}`);
     return escalatedResult;

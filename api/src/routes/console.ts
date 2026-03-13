@@ -7,9 +7,9 @@ import {
   machineSnapshots,
   knowledgeBase,
   agents,
+  alerts,
 } from "../db/schema.js";
-import { eq, desc, asc } from "drizzle-orm";
-import { agentAuth } from "../middleware/agentAuth.js";
+import { eq, desc, asc, and } from "drizzle-orm";
 
 const router = Router();
 
@@ -20,7 +20,13 @@ const client = process.env.ANTHROPIC_API_KEY
   ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
   : null;
 
-// GET /:agentId/messages - last 100 messages
+function extractJSON(text: string): string {
+  const match = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  if (match) return match[1].trim();
+  return text.trim();
+}
+
+// GET /:agentId/messages - conversation history
 router.get("/:agentId/messages", async (req, res) => {
   const agentId = req.params.agentId as string;
 
@@ -29,68 +35,88 @@ router.get("/:agentId/messages", async (req, res) => {
     .from(consoleMessages)
     .where(eq(consoleMessages.agentId, agentId))
     .orderBy(asc(consoleMessages.createdAt))
-    .limit(100);
+    .limit(200);
 
   res.json(messages);
 });
 
-// POST /:agentId/send - send a message (user chat or command)
-router.post("/:agentId/send", async (req, res) => {
+// POST /:agentId/execute - queue a command for the agent
+router.post("/:agentId/execute", async (req, res) => {
   const agentId = req.params.agentId as string;
-  const { message } = req.body;
+  const { command } = req.body;
 
-  if (!message || typeof message !== "string") {
+  if (!command || typeof command !== "string") {
+    res.status(400).json({ error: "command is required" });
+    return;
+  }
+
+  // Log command to console history
+  await db.insert(consoleMessages).values({
+    agentId,
+    role: "command",
+    content: command,
+  });
+
+  // Create remediation entry for agent to pick up
+  const [entry] = await db
+    .insert(remediationLog)
+    .values({ agentId, command })
+    .returning();
+
+  res.json({ id: entry.id, status: "queued" });
+});
+
+// GET /:agentId/result/:remediationId - poll for command result
+router.get("/:agentId/result/:remediationId", async (req, res) => {
+  const remediationId = req.params.remediationId as string;
+
+  const [entry] = await db
+    .select()
+    .from(remediationLog)
+    .where(eq(remediationLog.id, remediationId))
+    .limit(1);
+
+  if (!entry) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+
+  if (entry.success === null) {
+    // Still pending
+    res.json({ status: "pending" });
+    return;
+  }
+
+  res.json({
+    status: "complete",
+    output: entry.result,
+    success: entry.success,
+    executedAt: entry.executedAt,
+  });
+});
+
+// POST /:agentId/ask - ask AI about the machine (with context)
+router.post("/:agentId/ask", async (req, res) => {
+  const agentId = req.params.agentId as string;
+  const { message, terminalHistory } = req.body;
+
+  if (!message) {
     res.status(400).json({ error: "message is required" });
     return;
   }
 
-  // Store user message
-  await db.insert(consoleMessages).values({
-    agentId,
-    role: "user",
-    content: message,
-  });
-
-  // Check if it's a command
-  const isCommand =
-    message.startsWith("$") || message.startsWith("/run ");
-  if (isCommand) {
-    const command = message.startsWith("$")
-      ? message.slice(1).trim()
-      : message.slice(5).trim();
-
-    // Store command message
-    await db.insert(consoleMessages).values({
-      agentId,
-      role: "command",
-      content: command,
-    });
-
-    // Create remediation entry
-    const [entry] = await db
-      .insert(remediationLog)
-      .values({ agentId, command })
-      .returning();
-
-    res.json({
-      type: "command",
-      remediationId: entry.id,
-      message: "Command queued",
-    });
-    return;
-  }
-
-  // Chat message for AI
   if (!client) {
-    res.json({
-      type: "chat",
-      message: "AI unavailable — ANTHROPIC_API_KEY not configured",
-      model: null,
-    });
+    res.json({ response: "AI unavailable — ANTHROPIC_API_KEY not configured", model: null });
     return;
   }
 
-  // Fetch context
+  // Fetch machine context
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(eq(agents.id, agentId))
+    .limit(1);
+
   const [latestSnapshot] = await db
     .select()
     .from(machineSnapshots)
@@ -98,47 +124,50 @@ router.post("/:agentId/send", async (req, res) => {
     .orderBy(desc(machineSnapshots.timestamp))
     .limit(1);
 
-  const recentMessages = await db
+  const unresolvedAlerts = await db
     .select()
-    .from(consoleMessages)
-    .where(eq(consoleMessages.agentId, agentId))
-    .orderBy(desc(consoleMessages.createdAt))
-    .limit(20);
-
-  const [agent] = await db
-    .select()
-    .from(agents)
-    .where(eq(agents.id, agentId))
-    .limit(1);
+    .from(alerts)
+    .where(and(eq(alerts.agentId, agentId), eq(alerts.resolved, false)))
+    .orderBy(desc(alerts.createdAt))
+    .limit(10);
 
   const kbEntries = agent
-    ? await db
-        .select()
-        .from(knowledgeBase)
-        .where(eq(knowledgeBase.platform, agent.platform))
+    ? await db.select().from(knowledgeBase).where(eq(knowledgeBase.platform, agent.platform)).limit(20)
     : [];
 
-  const systemPrompt =
-    "You are an AI assistant helping troubleshoot a Linux machine. You can see the machine's current state. When you identify a solution, respond with a JSON block like ```solution\n{\"pattern\":\"...\",\"command\":\"...\",\"description\":\"...\"}\n``` to document it in the knowledge base. Suggest specific commands when relevant. Be concise.";
+  const systemPrompt = `You are an AI sysadmin assistant connected to a live Linux terminal on "${agent?.hostname ?? "unknown"}".
+You can see the machine's current state, alerts, and terminal history.
+Your job: help the user troubleshoot issues, suggest commands, and document solutions.
 
-  const conversationContext = recentMessages
-    .reverse()
-    .map((m) => `[${m.role}] ${m.content}`)
-    .join("\n");
+When suggesting a command, wrap it in a special block:
+\`\`\`suggest
+{"command": "the command to run", "reason": "why this will help"}
+\`\`\`
+
+When you've identified a working solution to document, use:
+\`\`\`solution
+{"pattern": "issue description", "command": "fix command", "description": "explanation"}
+\`\`\`
+
+Be concise and direct. Give one clear suggestion at a time.`;
 
   const userContent = `## Machine State
-${latestSnapshot ? JSON.stringify({ cpu: latestSnapshot.cpu, memory: latestSnapshot.memory, disk: latestSnapshot.disk, services: latestSnapshot.services }, null, 2) : "No snapshot available"}
+Host: ${agent?.hostname ?? "unknown"} (${agent?.os ?? "unknown"}, ${agent?.arch ?? "unknown"})
+${latestSnapshot ? `CPU: ${(latestSnapshot.cpu as any)?.usagePercent?.toFixed(1)}% | Memory: ${(latestSnapshot.memory as any)?.usagePercent?.toFixed(1)}% | Disk: ${((latestSnapshot.disk as any)?.[0]?.usagePercent ?? 0).toFixed(0)}%` : "No snapshot data"}
 
-## Knowledge Base
-${kbEntries.map((k) => `- ${k.issuePattern}: ${k.solution}`).join("\n") || "Empty"}
+## Active Alerts (${unresolvedAlerts.length})
+${unresolvedAlerts.map((a) => `- [${a.severity}] ${a.message}`).join("\n") || "None"}
 
-## Conversation History
-${conversationContext}
+## Known Solutions
+${kbEntries.map((k) => `- ${k.issuePattern}: ${k.solution}`).join("\n") || "None"}
+
+## Terminal History
+${terminalHistory || "(empty session)"}
 
 ## User Message
 ${message}`;
 
-  let model = HAIKU_MODEL;
+  const model = HAIKU_MODEL;
   const response = await client.messages.create({
     model,
     max_tokens: 1500,
@@ -146,37 +175,10 @@ ${message}`;
     messages: [{ role: "user", content: userContent }],
   });
 
-  let aiText =
-    response.content[0].type === "text" ? response.content[0].text : "";
+  const aiText = response.content[0].type === "text" ? response.content[0].text : "";
+  console.log(`[console] AI response by ${model}`);
 
-  // Escalate if AI seems uncertain
-  if (
-    aiText.toLowerCase().includes("i'm not sure") ||
-    aiText.toLowerCase().includes("i cannot determine") ||
-    aiText.toLowerCase().includes("need more information")
-  ) {
-    model = SONNET_MODEL;
-    console.log(`[console] Escalating to ${model}`);
-    const escalatedResponse = await client.messages.create({
-      model,
-      max_tokens: 1500,
-      system: systemPrompt,
-      messages: [
-        {
-          role: "user",
-          content: `ESCALATED: A preliminary analysis was uncertain. Provide a deeper, more thorough analysis.\n\n${userContent}`,
-        },
-      ],
-    });
-    aiText =
-      escalatedResponse.content[0].type === "text"
-        ? escalatedResponse.content[0].text
-        : "";
-  }
-
-  console.log(`[console] Analysis by ${model}`);
-
-  // Store AI response
+  // Log AI response
   await db.insert(consoleMessages).values({
     agentId,
     role: "assistant",
@@ -184,10 +186,8 @@ ${message}`;
     model,
   });
 
-  // Check for ```solution block and create KB entry
-  const solutionMatch = aiText.match(
-    /```solution\n([\s\S]*?)\n```/
-  );
+  // Check for solution block → auto-create KB entry
+  const solutionMatch = aiText.match(/```solution\n([\s\S]*?)\n```/);
   if (solutionMatch) {
     try {
       const solution = JSON.parse(solutionMatch[1]);
@@ -198,80 +198,24 @@ ${message}`;
         solution: solution.command,
         description: solution.description,
       });
+      console.log(`[console] KB entry created: ${solution.pattern}`);
     } catch {
-      // Ignore parse errors for solution blocks
+      // ignore parse errors
     }
   }
 
-  res.json({ type: "chat", message: aiText, model });
-});
-
-// POST /:agentId/command-output - agent reports command output
-router.post("/:agentId/command-output", agentAuth, async (req, res) => {
-  const agentId = req.params.agentId as string;
-  const { remediationId, output, success } = req.body;
-
-  if (!remediationId || output === undefined) {
-    res.status(400).json({ error: "remediationId and output are required" });
-    return;
+  // Extract suggestion if present
+  let suggestion = null;
+  const suggestMatch = aiText.match(/```suggest\n([\s\S]*?)\n```/);
+  if (suggestMatch) {
+    try {
+      suggestion = JSON.parse(suggestMatch[1]);
+    } catch {
+      // ignore
+    }
   }
 
-  // Store output message
-  await db.insert(consoleMessages).values({
-    agentId,
-    role: "output",
-    content: output,
-    remediationId,
-  });
-
-  // Update remediation log
-  await db
-    .update(remediationLog)
-    .set({ result: output, success, executedAt: new Date() })
-    .where(eq(remediationLog.id, remediationId));
-
-  // Ask AI to analyze the output
-  if (!client) {
-    res.json({ ok: true });
-    return;
-  }
-
-  const systemPrompt =
-    "You are an AI assistant helping troubleshoot a Linux machine. Analyze this command output and provide a brief assessment. Be concise.";
-
-  // Get the command that was run
-  const [remediation] = await db
-    .select()
-    .from(remediationLog)
-    .where(eq(remediationLog.id, remediationId))
-    .limit(1);
-
-  let model = HAIKU_MODEL;
-  const response = await client.messages.create({
-    model,
-    max_tokens: 1000,
-    system: systemPrompt,
-    messages: [
-      {
-        role: "user",
-        content: `Command: ${remediation?.command ?? "unknown"}\nSuccess: ${success}\nOutput:\n${output}`,
-      },
-    ],
-  });
-
-  const aiText =
-    response.content[0].type === "text" ? response.content[0].text : "";
-
-  console.log(`[console] Command analysis by ${model}`);
-
-  await db.insert(consoleMessages).values({
-    agentId,
-    role: "assistant",
-    content: aiText,
-    model,
-  });
-
-  res.json({ ok: true, analysis: aiText, model });
+  res.json({ response: aiText, model, suggestion });
 });
 
 export default router;

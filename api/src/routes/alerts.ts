@@ -33,6 +33,12 @@ router.get("/", async (req, res) => {
   res.json(rows);
 });
 
+// Clear all alerts
+router.delete("/clear", async (_req, res) => {
+  await db.delete(alerts).where(eq(alerts.resolved, false));
+  res.json({ cleared: true });
+});
+
 // Alert summary (counts by severity)
 router.get("/summary", async (_req, res) => {
   const result = await db

@@ -1,11 +1,13 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api, type Agent } from '@/lib/api';
 import StatusBadge from '@/components/StatusBadge';
 import HealthScore from '@/components/HealthScore';
-import { Monitor, AlertTriangle, Shield, Clock } from 'lucide-react';
+import { Monitor, AlertTriangle, Shield, Clock, CheckCircle } from 'lucide-react';
+import clsx from 'clsx';
 
 export default function Dashboard() {
+  const queryClient = useQueryClient();
   const { data: agents, isLoading } = useQuery({
     queryKey: ['agents'],
     queryFn: api.agents.list,
@@ -14,10 +16,18 @@ export default function Dashboard() {
     queryKey: ['alertSummary'],
     queryFn: api.alerts.summary,
   });
+  const { data: activeAlerts } = useQuery({
+    queryKey: ['activeAlerts'],
+    queryFn: () => api.alerts.list({ resolved: 'false', limit: 20 }),
+  });
 
   const onlineCount = agents?.filter((a) => a.status === 'online').length ?? 0;
   const offlineCount = agents?.filter((a) => a.status === 'offline').length ?? 0;
   const totalCount = agents?.length ?? 0;
+
+  const criticalAlerts = (activeAlerts ?? []).filter((a) => a.alert.severity === 'critical');
+  const warningAlerts = (activeAlerts ?? []).filter((a) => a.alert.severity === 'warning');
+  const urgentAlerts = [...criticalAlerts, ...warningAlerts];
 
   return (
     <div>
@@ -31,32 +41,92 @@ export default function Dashboard() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-4 gap-4 mb-6">
         <SummaryCard
           icon={<Monitor className="w-5 h-5 text-emerald-400" />}
           label="Online"
           value={onlineCount}
-          color="emerald"
         />
         <SummaryCard
           icon={<Monitor className="w-5 h-5 text-red-400" />}
           label="Offline"
           value={offlineCount}
-          color="red"
         />
         <SummaryCard
           icon={<AlertTriangle className="w-5 h-5 text-yellow-400" />}
           label="Unresolved Alerts"
           value={alertSummary?.totalUnresolved ?? 0}
-          color="yellow"
         />
         <SummaryCard
           icon={<Shield className="w-5 h-5 text-blue-400" />}
           label="Total Agents"
           value={totalCount}
-          color="blue"
         />
       </div>
+
+      {/* Critical Alerts Section */}
+      {urgentAlerts.length > 0 ? (
+        <div className="mb-8">
+          <h2 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-red-400" />
+            Active Alerts
+          </h2>
+          <div className="space-y-2">
+            {urgentAlerts.map(({ alert, agentName }) => (
+              <div
+                key={alert.id}
+                className={clsx(
+                  'bg-gray-900 rounded-lg p-4 flex items-center justify-between border-l-4',
+                  alert.severity === 'critical' && 'border-l-red-500',
+                  alert.severity === 'warning' && 'border-l-yellow-500',
+                )}
+              >
+                <div className="flex items-center gap-3 flex-1 min-w-0">
+                  <AlertTriangle
+                    className={clsx(
+                      'w-5 h-5 shrink-0',
+                      alert.severity === 'critical' ? 'text-red-400' : 'text-yellow-400',
+                    )}
+                  />
+                  <div className="min-w-0">
+                    <p className="text-white text-sm font-medium truncate">{alert.message}</p>
+                    <p className="text-gray-500 text-xs mt-0.5">
+                      {agentName ?? 'Unknown agent'} &middot; {getTimeAgo(new Date(alert.createdAt))}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0 ml-4">
+                  <span
+                    className={clsx(
+                      'px-2 py-0.5 rounded text-xs font-medium uppercase',
+                      alert.severity === 'critical' && 'bg-red-500/10 text-red-400',
+                      alert.severity === 'warning' && 'bg-yellow-500/10 text-yellow-400',
+                    )}
+                  >
+                    {alert.severity}
+                  </span>
+                  <button
+                    onClick={() =>
+                      api.alerts.resolve(alert.id).then(() => {
+                        queryClient.invalidateQueries({ queryKey: ['activeAlerts'] });
+                        queryClient.invalidateQueries({ queryKey: ['alertSummary'] });
+                      })
+                    }
+                    className="text-xs bg-gray-800 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-700 transition-colors"
+                  >
+                    Resolve
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="mb-8 bg-gray-900 border border-gray-800 rounded-xl p-6 text-center">
+          <CheckCircle className="w-8 h-8 text-emerald-400 mx-auto mb-2" />
+          <p className="text-gray-400 text-sm">All clear — no active alerts</p>
+        </div>
+      )}
 
       {/* Agent Grid */}
       {isLoading ? (
@@ -82,11 +152,10 @@ export default function Dashboard() {
   );
 }
 
-function SummaryCard({ icon, label, value, color }: {
+function SummaryCard({ icon, label, value }: {
   icon: React.ReactNode;
   label: string;
   value: number;
-  color: string;
 }) {
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
