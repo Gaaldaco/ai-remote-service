@@ -48,6 +48,20 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", service: "ai-remote-service-api", timestamp: new Date().toISOString() });
 });
 
+// ─── Install script endpoint ─────────────────────────────────────────────────
+app.get("/install.sh", (_req, res) => {
+  const repo = "Gaaldaco/ai-remote-service";
+  const script = `#!/bin/bash
+set -e
+echo "Downloading installer..."
+curl -sSL "https://raw.githubusercontent.com/${repo}/main/agent/install.sh" -o /tmp/ai-remote-agent-install.sh
+chmod +x /tmp/ai-remote-agent-install.sh
+bash /tmp/ai-remote-agent-install.sh
+rm -f /tmp/ai-remote-agent-install.sh`;
+  res.setHeader("Content-Type", "text/plain");
+  res.send(script);
+});
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.use("/api/agents", agentsRouter);
 app.use("/api/snapshots", snapshotsRouter);

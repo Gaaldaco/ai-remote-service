@@ -2,8 +2,9 @@
 set -e
 
 # AI Remote Agent Installer
-# Run as root: sudo bash install.sh
+# Run as root: curl -sSL https://YOUR_API_URL/install.sh | sudo bash
 
+REPO="Gaaldaco/ai-remote-service"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/ai-remote-agent"
 LOG_DIR="/var/log/ai-remote-agent"
@@ -33,6 +34,32 @@ case $ARCH in
     exit 1
     ;;
 esac
+
+echo "Detected architecture: $ARCH ($BINARY_SUFFIX)"
+
+# Download latest binary from GitHub releases
+echo "Downloading latest agent binary..."
+LATEST_URL="https://github.com/${REPO}/releases/latest/download/${BINARY_NAME}-${BINARY_SUFFIX}"
+
+if command -v curl &> /dev/null; then
+  HTTP_CODE=$(curl -sL -w "%{http_code}" -o "/tmp/${BINARY_NAME}" "$LATEST_URL")
+  if [ "$HTTP_CODE" != "200" ]; then
+    echo "Error: Failed to download binary (HTTP $HTTP_CODE)"
+    echo "URL: $LATEST_URL"
+    echo "Make sure a release exists at https://github.com/${REPO}/releases"
+    exit 1
+  fi
+elif command -v wget &> /dev/null; then
+  wget -q -O "/tmp/${BINARY_NAME}" "$LATEST_URL" || {
+    echo "Error: Failed to download binary"
+    exit 1
+  }
+else
+  echo "Error: curl or wget required"
+  exit 1
+fi
+
+echo "Download complete."
 
 # Prompt for API URL and key
 read -p "API URL (e.g., https://your-api.up.railway.app): " API_URL
@@ -86,17 +113,8 @@ fi
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$LOG_DIR"
 
-# Check if binary exists in current directory
-if [ -f "./bin/${BINARY_NAME}-${BINARY_SUFFIX}" ]; then
-  cp "./bin/${BINARY_NAME}-${BINARY_SUFFIX}" "${INSTALL_DIR}/${BINARY_NAME}"
-elif [ -f "./${BINARY_NAME}" ]; then
-  cp "./${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
-else
-  echo "Error: Binary not found. Build it first with: make build-linux"
-  echo "Or place ${BINARY_NAME}-${BINARY_SUFFIX} in ./bin/"
-  exit 1
-fi
-
+# Install binary
+mv "/tmp/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
 chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 
 # Write config
@@ -112,7 +130,25 @@ EOF
 chmod 600 "${CONFIG_DIR}/config.yaml"
 
 # Install systemd service
-cp ./ai-remote-agent.service "$SERVICE_FILE"
+cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=AI Remote Service Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ai-remote-agent
+Restart=always
+RestartSec=10
+User=root
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-remote-agent
+
+[Install]
+WantedBy=multi-user.target
+EOF
 
 # Enable and start
 systemctl daemon-reload
