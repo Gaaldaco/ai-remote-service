@@ -76,12 +76,12 @@ export const snapshotPayloadSchema = z.object({
   cpu: cpuSchema,
   memory: memorySchema,
   disk: z.array(diskEntrySchema),
-  network: z.array(networkEntrySchema).optional(),
+  network: z.array(networkEntrySchema).nullable().optional(),
   processes: z.array(processEntrySchema),
-  openPorts: z.array(openPortSchema).optional(),
-  users: z.array(userSchema).optional(),
-  authLogs: z.array(authLogSchema).optional(),
-  pendingUpdates: z.array(updateSchema).optional(),
+  openPorts: z.array(openPortSchema).nullable().optional(),
+  users: z.array(userSchema).nullable().optional(),
+  authLogs: z.array(authLogSchema).nullable().optional(),
+  pendingUpdates: z.array(updateSchema).nullable().optional(),
   services: z.array(serviceSchema),
 });
 
