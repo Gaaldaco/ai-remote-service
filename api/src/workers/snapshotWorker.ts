@@ -294,15 +294,15 @@ const worker = new Worker(
 
     const analysis = analyzeLocally(snapshotData, agent.hostname, monitored, kbMapped);
 
-    // 6. Only call AI if there are critical issues or monitored service failures
-    const hasCritical = analysis.issues.some((i) => i.severity === "critical");
+    // 6. Only call AI for monitored service failures — CPU/memory/disk criticals
+    //    are fully handled by rule-based analysis and don't need AI tokens
     const hasServiceDown = analysis.issues.some(
       (i) => i.category === "availability" && i.severity === "critical"
     );
 
-    if (hasCritical || hasServiceDown) {
+    if (hasServiceDown) {
       console.log(
-        `[worker] Critical issues detected — escalating to AI for deeper analysis`
+        `[worker] Monitored service failure detected — escalating to AI for root-cause analysis`
       );
 
       try {
@@ -339,7 +339,7 @@ const worker = new Worker(
       }
     } else {
       console.log(
-        `[worker] No critical issues — skipping AI, using local analysis (score=${analysis.healthScore})`
+        `[worker] No service failures — skipping AI, using local analysis (score=${analysis.healthScore})`
       );
     }
 
