@@ -1,20 +1,21 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import {
   Terminal, Bot, ArrowLeft, Send, Loader2, Play,
-  ChevronDown, ChevronUp, Plus, MessageSquare, Trash2,
+  ChevronDown, ChevronUp, Plus, MessageSquare, Trash2, Zap,
 } from 'lucide-react';
 import clsx from 'clsx';
 
 interface TerminalLine {
-  type: 'command' | 'output' | 'error' | 'system';
+  type: 'command' | 'output' | 'error' | 'system' | 'ai';
   text: string;
 }
 
 export default function Console() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [input, setInput] = useState('');
   const [lines, setLines] = useState<TerminalLine[]>([
@@ -28,6 +29,10 @@ export default function Console() {
   const [aiSuggestion, setAiSuggestion] = useState<{ command: string; reason: string } | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [showSessions, setShowSessions] = useState(false);
+  const [autopilot, setAutopilot] = useState(false);
+  const [autopilotPaused, setAutopilotPaused] = useState(false);
+  const [autopilotFix, setAutopilotFix] = useState<{ command: string; reason: string } | null>(null);
+  const autopilotRef = useRef(false); // ref to avoid stale closures
   const terminalRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -79,16 +84,108 @@ export default function Console() {
     refetchInterval: 2000,
     select: (data) => {
       if (data?.status === 'complete') {
+        const outputText = data.output || '(no output)';
         setLines((prev) => [
           ...prev.filter((l) => !(l.type === 'system' && l.text.includes('Executing...'))),
-          { type: data.success ? 'output' : 'error', text: data.output || '(no output)' },
+          { type: data.success ? 'output' : 'error', text: outputText },
         ]);
         setPendingCmd(null);
         setPendingId(null);
+
+        // Autopilot: feed output back to AI for next step
+        if (autopilotRef.current && id && sessionId) {
+          setTimeout(() => {
+            autopilotStep(`Command output:\n${outputText}\n\nAnalyze this output and decide what to do next. If you need more information, run another diagnostic. If you can identify a fix, suggest it.`);
+          }, 500);
+        }
       }
       return data;
     },
   });
+
+  // Autopilot step — send message to AI and process response
+  const autopilotStep = useCallback(async (message: string) => {
+    if (!id || !sessionId) return;
+
+    setLines((prev) => [...prev, { type: 'ai', text: '[AI] Analyzing...' }]);
+
+    try {
+      const terminalHistory = lines.slice(-30).map((l) => l.text).join('\n');
+      const data = await api.console.ask(id, message, terminalHistory, sessionId, true);
+
+      // Update session
+      if (data.sessionId && !sessionId) setSessionId(data.sessionId);
+
+      // Show AI response in terminal
+      const cleanResponse = data.response
+        .replace(/```diagnostic\n[\s\S]*?\n```/g, '')
+        .replace(/```suggest\n[\s\S]*?\n```/g, '')
+        .replace(/```solution\n[\s\S]*?\n```/g, '')
+        .trim();
+
+      setLines((prev) => [
+        ...prev.filter((l) => !(l.type === 'ai' && l.text === '[AI] Analyzing...')),
+        { type: 'ai', text: `[AI] ${cleanResponse}` },
+      ]);
+
+      // Handle diagnostic (auto-run)
+      if (data.diagnostic) {
+        setLines((prev) => [...prev, { type: 'ai', text: `[AI] Running diagnostic: ${data.diagnostic!.reason}` }]);
+        // Small delay then auto-execute
+        setTimeout(() => executeCommand(data.diagnostic!.command), 300);
+        return;
+      }
+
+      // Handle fix suggestion (pause for user approval)
+      if (data.suggestion) {
+        setAutopilotPaused(true);
+        setAutopilotFix(data.suggestion);
+        setLines((prev) => [...prev, {
+          type: 'ai',
+          text: `[AI] Suggested fix: ${data.suggestion!.command}\n     Reason: ${data.suggestion!.reason}\n     Waiting for your approval...`,
+        }]);
+        return;
+      }
+
+      // If AI didn't suggest anything, it might be done or needs more info
+    } catch (err: any) {
+      setLines((prev) => [
+        ...prev.filter((l) => !(l.type === 'ai' && l.text === '[AI] Analyzing...')),
+        { type: 'error', text: `[AI Error] ${err.message}` },
+      ]);
+    }
+  }, [id, sessionId, lines]);
+
+  // Start autopilot from URL params
+  useEffect(() => {
+    if (!sessionId || !id) return;
+    const isAutopilot = searchParams.get('autopilot') === 'true';
+    if (!isAutopilot || autopilot) return;
+
+    setAutopilot(true);
+    autopilotRef.current = true;
+    setAiOpen(true);
+
+    const issue = searchParams.get('issue') || '';
+    const failedCmd = searchParams.get('failedCmd') || '';
+    const failedOutput = searchParams.get('failedOutput') || '';
+    const alertId = searchParams.get('alertId') || '';
+
+    // Clear URL params so refreshing doesn't restart autopilot
+    setSearchParams({}, { replace: true });
+
+    const initialMessage = failedCmd
+      ? `A remediation command failed on this machine. I need you to investigate and find a fix.\n\nIssue: ${issue}\nFailed command: ${failedCmd}\nError output: ${failedOutput}\n${alertId ? `Alert ID: ${alertId}` : ''}\n\nStart by running diagnostic commands to understand why it failed and what the actual root cause is.`
+      : `There's a critical issue on this machine that needs investigation.\n\nIssue: ${issue}\n${alertId ? `Alert ID: ${alertId}` : ''}\n\nStart by running diagnostic commands to understand the root cause and find a fix.`;
+
+    setLines((prev) => [
+      ...prev,
+      { type: 'system', text: '--- Autopilot mode activated ---' },
+      { type: 'ai', text: `[AI] Investigating: ${issue || 'system issue'}` },
+    ]);
+
+    setTimeout(() => autopilotStep(initialMessage), 500);
+  }, [sessionId, id, searchParams, autopilot]);
 
   useEffect(() => {
     if (terminalRef.current) {
@@ -185,6 +282,18 @@ export default function Console() {
               {agent.name} ({agent.hostname})
             </span>
           )}
+          {autopilot && (
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-500/10 text-blue-400">
+              <Zap className="w-3 h-3" />
+              Autopilot
+              <button
+                onClick={() => { setAutopilot(false); autopilotRef.current = false; setAutopilotPaused(false); setAutopilotFix(null); setLines((prev) => [...prev, { type: 'system', text: '--- Autopilot stopped ---' }]); }}
+                className="ml-1 text-red-400 hover:text-red-300"
+              >
+                Stop
+              </button>
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {/* Session controls */}
@@ -273,11 +382,57 @@ export default function Console() {
               line.type === 'output' && 'text-gray-300',
               line.type === 'error' && 'text-red-400',
               line.type === 'system' && 'text-yellow-500/70 italic text-xs',
+              line.type === 'ai' && 'text-blue-300 text-xs',
             )}
           >
             {line.text}
           </div>
         ))}
+
+        {/* Autopilot fix approval */}
+        {autopilotPaused && autopilotFix && (
+          <div className="bg-blue-500/10 border border-blue-500/30 rounded-md p-3 my-2 mx-1">
+            <p className="text-blue-300 text-xs mb-1">AI wants to run this fix:</p>
+            <code className="text-emerald-400 text-xs block mb-1 font-mono">{autopilotFix.command}</code>
+            <p className="text-gray-500 text-xs mb-2">{autopilotFix.reason}</p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const fix = autopilotFix;
+                  setAutopilotPaused(false);
+                  setAutopilotFix(null);
+                  executeCommand(fix.command);
+                }}
+                className="px-3 py-1 rounded text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600"
+              >
+                Approve & Run
+              </button>
+              <button
+                onClick={() => {
+                  setAutopilotPaused(false);
+                  setAutopilotFix(null);
+                  setLines((prev) => [...prev, { type: 'system', text: 'Fix rejected by user' }]);
+                  autopilotStep('The user rejected that fix. Suggest an alternative approach or investigate further.');
+                }}
+                className="px-3 py-1 rounded text-xs font-medium bg-gray-700 text-gray-300 hover:bg-gray-600"
+              >
+                Reject
+              </button>
+              <button
+                onClick={() => {
+                  setAutopilot(false);
+                  autopilotRef.current = false;
+                  setAutopilotPaused(false);
+                  setAutopilotFix(null);
+                  setLines((prev) => [...prev, { type: 'system', text: '--- Autopilot stopped ---' }]);
+                }}
+                className="px-3 py-1 rounded text-xs font-medium text-red-400 hover:text-red-300"
+              >
+                Stop Autopilot
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="flex items-center text-emerald-400 mt-1">
           <span className="text-gray-600">{hostname}:~$</span>

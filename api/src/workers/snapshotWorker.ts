@@ -57,19 +57,27 @@ function analyzeLocally(
   // ── CPU ──
   const cpuUsage = snapshot.cpu?.usagePercent ?? 0;
   const processes = (snapshot.processes as any[]) ?? [];
-  const topCpuProc = processes.length > 0
-    ? processes.reduce((top, p) => (p.cpu > (top?.cpu ?? 0) ? p : top), processes[0])
+
+  // Filter out system-critical processes that should never be killed
+  const SYSTEM_PROCS = new Set(["init", "systemd", "kthreadd", "sshd", "journald", "udevd", "dbus-daemon", "ai-remote-agent"]);
+  const killableProcs = processes.filter((p: any) =>
+    p.pid > 1 && !SYSTEM_PROCS.has(p.name?.replace(/.*\//, ""))
+  );
+
+  const topCpuProc = killableProcs.length > 0
+    ? killableProcs.reduce((top, p) => (p.cpu > (top?.cpu ?? 0) ? p : top), killableProcs[0])
     : null;
 
   if (cpuUsage >= THRESHOLDS.cpu.critical) {
-    const cpuCmd = topCpuProc
-      ? `kill -9 $(pgrep -f '${topCpuProc.name}' | head -5 | tr '\\n' ' ')  # kill top CPU hog: ${topCpuProc.name} (${topCpuProc.cpu}% CPU)`
-      : null;
+    // Don't suggest a blind kill — flag for live troubleshooting
+    const desc = topCpuProc && topCpuProc.cpu > 10
+      ? `CPU critically high at ${cpuUsage.toFixed(1)}% — top process: ${topCpuProc.name} (${topCpuProc.cpu}% CPU, PID ${topCpuProc.pid})`
+      : `CPU critically high at ${cpuUsage.toFixed(1)}%`;
     issues.push({
       category: "performance",
       severity: "critical",
-      description: `CPU critically high at ${cpuUsage.toFixed(1)}%${topCpuProc ? ` — top process: ${topCpuProc.name} (${topCpuProc.cpu}%)` : ""}`,
-      suggestedCommand: cpuCmd,
+      description: desc,
+      suggestedCommand: null, // no blind fix — needs live troubleshooting
       matchesKnownPattern: findKbMatch("high cpu", kbEntries),
     });
     healthScore -= 30;
@@ -77,7 +85,7 @@ function analyzeLocally(
     issues.push({
       category: "performance",
       severity: "warning",
-      description: `CPU elevated at ${cpuUsage.toFixed(1)}%${topCpuProc ? ` — top process: ${topCpuProc.name} (${topCpuProc.cpu}%)` : ""}`,
+      description: `CPU elevated at ${cpuUsage.toFixed(1)}%${topCpuProc && topCpuProc.cpu > 10 ? ` — top: ${topCpuProc.name} (${topCpuProc.cpu}%)` : ""}`,
       suggestedCommand: null,
       matchesKnownPattern: findKbMatch("high cpu", kbEntries),
     });
@@ -86,19 +94,19 @@ function analyzeLocally(
 
   // ── Memory ──
   const memUsage = snapshot.memory?.usagePercent ?? 0;
-  const topMemProc = processes.length > 0
-    ? processes.reduce((top, p) => (p.mem > (top?.mem ?? 0) ? p : top), processes[0])
+  const topMemProc = killableProcs.length > 0
+    ? killableProcs.reduce((top, p) => (p.mem > (top?.mem ?? 0) ? p : top), killableProcs[0])
     : null;
 
   if (memUsage >= THRESHOLDS.memory.critical) {
-    const memCmd = topMemProc
-      ? `kill -9 $(pgrep -f '${topMemProc.name}' | head -5 | tr '\\n' ' ')  # kill top memory hog: ${topMemProc.name} (${topMemProc.mem}% MEM)`
-      : null;
+    const desc = topMemProc && topMemProc.mem > 10
+      ? `Memory critically high at ${memUsage.toFixed(1)}% — top process: ${topMemProc.name} (${topMemProc.mem}% MEM, PID ${topMemProc.pid})`
+      : `Memory critically high at ${memUsage.toFixed(1)}%`;
     issues.push({
       category: "performance",
       severity: "critical",
-      description: `Memory critically high at ${memUsage.toFixed(1)}%${topMemProc ? ` — top process: ${topMemProc.name} (${topMemProc.mem}%)` : ""}`,
-      suggestedCommand: memCmd,
+      description: desc,
+      suggestedCommand: null, // needs live troubleshooting
       matchesKnownPattern: findKbMatch("high memory", kbEntries),
     });
     healthScore -= 30;
@@ -106,7 +114,7 @@ function analyzeLocally(
     issues.push({
       category: "performance",
       severity: "warning",
-      description: `Memory elevated at ${memUsage.toFixed(1)}%${topMemProc ? ` — top process: ${topMemProc.name} (${topMemProc.mem}%)` : ""}`,
+      description: `Memory elevated at ${memUsage.toFixed(1)}%${topMemProc && topMemProc.mem > 10 ? ` — top: ${topMemProc.name} (${topMemProc.mem}%)` : ""}`,
       suggestedCommand: null,
       matchesKnownPattern: findKbMatch("high memory", kbEntries),
     });

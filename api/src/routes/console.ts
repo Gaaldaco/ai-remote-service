@@ -134,7 +134,7 @@ router.get("/:agentId/result/:remediationId", async (req, res) => {
 // POST /:agentId/ask - ask AI about the machine (session-aware)
 router.post("/:agentId/ask", async (req, res) => {
   const agentId = req.params.agentId as string;
-  const { message, terminalHistory, sessionId } = req.body;
+  const { message, terminalHistory, sessionId, autopilot } = req.body;
 
   if (!message) {
     res.status(400).json({ error: "message is required" });
@@ -189,19 +189,55 @@ router.post("/:agentId/ask", async (req, res) => {
     .limit(1);
 
   // Build system prompt with machine state baked in
+  const autopilotInstructions = autopilot ? `
+## AUTOPILOT MODE — You are driving the terminal automatically.
+Your workflow:
+1. Run DIAGNOSTIC commands first to understand the problem (logs, status checks, process lists)
+2. Once you understand the root cause, suggest a FIX command
+3. NEVER run destructive commands: no rm -rf, no dd, no mkfs, no format, no DROP, no reboot, no shutdown, no kill -9 on system processes
+4. Diagnostic commands auto-execute. Fix commands require user approval.
+
+Use this block for diagnostic commands (will auto-run):
+\`\`\`diagnostic
+{"command": "the diagnostic command", "reason": "what we're checking"}
+\`\`\`
+
+Use this block for fix commands (requires user approval):
+\`\`\`suggest
+{"command": "the fix command", "reason": "how this fixes the issue"}
+\`\`\`
+
+When the fix works, document it:
+\`\`\`solution
+{"pattern": "issue description", "command": "fix command", "description": "explanation"}
+\`\`\`
+
+Always explain what you're doing and what you found. Run ONE command at a time, then analyze the output before deciding next steps.
+` : "";
+
   const systemPrompt = `You are an AI sysadmin assistant connected to a live Linux terminal on "${agent?.hostname ?? "unknown"}".
 You have full conversation history for this session. Reference previous messages naturally.
 Your job: help the user troubleshoot issues, suggest commands, and document solutions.
-
-When suggesting a command, wrap it in a special block:
+${autopilotInstructions}
+When suggesting a command to run, wrap it in a special block:
 \`\`\`suggest
 {"command": "the command to run", "reason": "why this will help"}
+\`\`\`
+
+When you want to run a diagnostic that doesn't change anything, use:
+\`\`\`diagnostic
+{"command": "the read-only command", "reason": "what we're checking"}
 \`\`\`
 
 When you've identified a working solution to document, use:
 \`\`\`solution
 {"pattern": "issue description", "command": "fix command", "description": "explanation"}
 \`\`\`
+
+IMPORTANT SAFETY RULES:
+- NEVER suggest destructive commands (rm -rf /, dd, mkfs, format, DROP DATABASE, reboot, shutdown, halt, init 0)
+- NEVER kill system processes (PID 1, init, systemd, sshd, the ai-remote-agent)
+- Private IPs (10.x, 192.168.x) are legitimate admin traffic, not attacks
 
 Be concise and direct. Give one clear suggestion at a time.
 
@@ -363,7 +399,17 @@ ${kbEntries.map((k) => `- ${k.issuePattern}: ${k.solution}`).join("\n") || "None
     }
   }
 
-  res.json({ response: aiText, model, suggestion, sessionId: activeSessionId });
+  let diagnostic = null;
+  const diagnosticMatch = aiText.match(/```diagnostic\n([\s\S]*?)\n```/);
+  if (diagnosticMatch) {
+    try {
+      diagnostic = JSON.parse(diagnosticMatch[1]);
+    } catch {
+      // ignore
+    }
+  }
+
+  res.json({ response: aiText, model, suggestion, diagnostic, sessionId: activeSessionId });
 });
 
 // ─── Session compression ────────────────────────────────────────────────────

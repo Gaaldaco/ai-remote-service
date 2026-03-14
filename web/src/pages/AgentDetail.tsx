@@ -245,13 +245,23 @@ export default function AgentDetail() {
                     >
                       <span className="font-medium text-xs uppercase">[{issue.category}]</span>{' '}
                       {issue.description}
-                      {issue.suggestedCommand && (
+                      {issue.suggestedCommand ? (
                         <RunCommandButton
                           agentId={id!}
                           command={issue.suggestedCommand}
                           issueCategory={issue.category}
                           issueDescription={issue.description}
                         />
+                      ) : issue.severity === 'critical' && (
+                        <div className="mt-1.5">
+                          <Link
+                            to={`/agents/${id}/console?autopilot=true&issue=${encodeURIComponent(issue.description)}`}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 no-underline"
+                          >
+                            <Terminal className="w-3.5 h-3.5" />
+                            Start Live Troubleshooting
+                          </Link>
+                        </div>
                       )}
                     </div>
                   ))}
@@ -547,6 +557,7 @@ function RunCommandButton({
   issueDescription?: string;
   onDone?: () => void;
 }) {
+  const navigate = useNavigate();
   const [status, setStatus] = useState<'idle' | 'pending' | 'polling' | 'success' | 'failed'>('idle');
   const [result, setResult] = useState<string | null>(null);
   const [showKB, setShowKB] = useState(false);
@@ -557,7 +568,6 @@ function RunCommandButton({
     try {
       const entry = await api.remediation.manual(agentId, command, alertId);
       setStatus('polling');
-      // Poll for result
       let attempts = 0;
       const poll = setInterval(async () => {
         attempts++;
@@ -582,6 +592,17 @@ function RunCommandButton({
       setStatus('failed');
       setResult(err.message);
     }
+  };
+
+  const startTroubleshooting = () => {
+    const params = new URLSearchParams({
+      autopilot: 'true',
+      alertId: alertId ?? '',
+      issue: issueDescription ?? '',
+      failedCmd: command,
+      failedOutput: result ?? 'Command failed',
+    });
+    navigate(`/agents/${agentId}/console?${params}`);
   };
 
   return (
@@ -622,6 +643,18 @@ function RunCommandButton({
       </div>
       {result && (
         <pre className="mt-1.5 bg-gray-800 p-2 rounded text-xs text-gray-400 overflow-auto max-h-32">{result}</pre>
+      )}
+      {status === 'failed' && (
+        <div className="mt-2 bg-blue-500/5 border border-blue-500/20 rounded-md p-3">
+          <p className="text-blue-300 text-xs mb-2">This will need a live session to troubleshoot. Want to start live troubleshooting?</p>
+          <button
+            onClick={startTroubleshooting}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-blue-500/10 text-blue-400 hover:bg-blue-500/20"
+          >
+            <Terminal className="w-3.5 h-3.5" />
+            Start Live Troubleshooting
+          </button>
+        </div>
       )}
       {showKB && (
         <SaveToKBModal

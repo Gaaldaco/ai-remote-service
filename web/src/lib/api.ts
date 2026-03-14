@@ -87,9 +87,9 @@ export const api = {
       }),
     result: (agentId: string, remediationId: string) =>
       request<{ status: string; output?: string; success?: boolean }>(`/api/console/${agentId}/result/${remediationId}`),
-    ask: (agentId: string, message: string, terminalHistory: string, sessionId?: string) =>
-      request<{ response: string; model: string; suggestion?: { command: string; reason: string }; sessionId: string }>(`/api/console/${agentId}/ask`, {
-        method: 'POST', body: JSON.stringify({ message, terminalHistory, sessionId }),
+    ask: (agentId: string, message: string, terminalHistory: string, sessionId?: string, autopilot?: boolean) =>
+      request<{ response: string; model: string; suggestion?: { command: string; reason: string }; diagnostic?: { command: string; reason: string }; sessionId: string }>(`/api/console/${agentId}/ask`, {
+        method: 'POST', body: JSON.stringify({ message, terminalHistory, sessionId, autopilot }),
       }),
   },
   remediation: {
