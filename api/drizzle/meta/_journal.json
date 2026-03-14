@@ -22,6 +22,20 @@
       "when": 1773463360480,
       "tag": "0002_minor_the_leader",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1773469950672,
+      "tag": "0003_dusty_betty_brant",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1773470097802,
+      "tag": "0004_tidy_onslaught",
+      "breakpoints": true
     }
   ]
 }

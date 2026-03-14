@@ -1,0 +1,1 @@
+ALTER TABLE "knowledge_base" ADD COLUMN "solution_steps" jsonb;

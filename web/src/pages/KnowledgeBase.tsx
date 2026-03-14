@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type KBEntry } from '@/lib/api';
-import { BookOpen, Plus, Trash2, ToggleLeft, ToggleRight, Pencil, Check, X } from 'lucide-react';
+import { BookOpen, Plus, Trash2, ToggleLeft, ToggleRight, Pencil, Check, X, ChevronDown, ChevronRight } from 'lucide-react';
 import clsx from 'clsx';
 
 export default function KnowledgeBase() {
@@ -101,56 +101,111 @@ function ViewRow({
   onDelete: () => void;
   onToggleAutoApply: () => void;
 }) {
+  const [showSteps, setShowSteps] = useState(false);
   const total = entry.successCount + entry.failureCount;
   const rate = total > 0 ? Math.round((entry.successCount / total) * 100) : null;
+  const hasSteps = entry.solutionSteps && entry.solutionSteps.length > 0;
 
   return (
-    <tr className="border-b border-gray-800/50 hover:bg-gray-800/30">
-      <td className="px-4 py-3">
-        <span className="text-white text-xs font-medium">{entry.issuePattern}</span>
-        {entry.description && (
-          <span className="text-gray-500 text-xs block mt-0.5">{entry.description}</span>
-        )}
-      </td>
-      <td className="px-4 py-3">
-        <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded">
-          {entry.issueCategory}
-        </span>
-      </td>
-      <td className="px-4 py-3">
-        <code className="text-emerald-400 text-xs">{entry.solution}</code>
-      </td>
-      <td className="px-4 py-3 text-xs text-gray-400">
-        {rate !== null ? (
-          <span className={rate >= 70 ? 'text-emerald-400' : rate >= 40 ? 'text-yellow-400' : 'text-red-400'}>
-            {rate}% ({total})
-          </span>
-        ) : (
-          <span className="text-gray-600">-</span>
-        )}
-      </td>
-      <td className="px-4 py-3">
-        <button
-          onClick={onToggleAutoApply}
-          className={clsx(
-            'flex items-center gap-1 text-xs',
-            entry.autoApply ? 'text-emerald-400' : 'text-gray-600'
+    <>
+      <tr className="border-b border-gray-800/50 hover:bg-gray-800/30">
+        <td className="px-4 py-3">
+          <span className="text-white text-xs font-medium">{entry.issuePattern}</span>
+          {entry.description && (
+            <span className="text-gray-500 text-xs block mt-0.5">{entry.description}</span>
           )}
-        >
-          {entry.autoApply ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
-        </button>
-      </td>
-      <td className="px-4 py-3 text-right">
-        <div className="flex items-center gap-1 justify-end">
-          <button onClick={onEdit} className="text-gray-500 hover:text-blue-400 p-1" title="Edit">
-            <Pencil className="w-3.5 h-3.5" />
+        </td>
+        <td className="px-4 py-3">
+          <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded">
+            {entry.issueCategory}
+          </span>
+          <span className={clsx(
+            'text-[10px] px-1.5 py-0.5 rounded ml-1.5',
+            entry.scope === 'global'
+              ? 'bg-purple-900/50 text-purple-400'
+              : 'bg-gray-800 text-gray-600'
+          )}>
+            {entry.scope === 'global' ? 'Global' : 'Device'}
+          </span>
+        </td>
+        <td className="px-4 py-3">
+          <div className="flex items-center gap-1.5">
+            {hasSteps && (
+              <button
+                onClick={() => setShowSteps(!showSteps)}
+                className="text-gray-500 hover:text-gray-300 flex-shrink-0"
+                title="Show diagnostic steps"
+              >
+                {showSteps ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+              </button>
+            )}
+            <div>
+              <code className="text-emerald-400 text-xs">{entry.solution}</code>
+              {hasSteps && (
+                <span className="text-gray-600 text-[10px] ml-1.5">
+                  {entry.solutionSteps!.length} steps
+                </span>
+              )}
+            </div>
+          </div>
+        </td>
+        <td className="px-4 py-3 text-xs text-gray-400">
+          {rate !== null ? (
+            <span className={rate >= 70 ? 'text-emerald-400' : rate >= 40 ? 'text-yellow-400' : 'text-red-400'}>
+              {rate}% ({total})
+            </span>
+          ) : (
+            <span className="text-gray-600">-</span>
+          )}
+        </td>
+        <td className="px-4 py-3">
+          <button
+            onClick={onToggleAutoApply}
+            className={clsx(
+              'flex items-center gap-1 text-xs',
+              entry.autoApply ? 'text-emerald-400' : 'text-gray-600'
+            )}
+          >
+            {entry.autoApply ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
           </button>
-          <button onClick={onDelete} className="text-gray-500 hover:text-red-400 p-1" title="Delete">
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </td>
-    </tr>
+        </td>
+        <td className="px-4 py-3 text-right">
+          <div className="flex items-center gap-1 justify-end">
+            <button onClick={onEdit} className="text-gray-500 hover:text-blue-400 p-1" title="Edit">
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+            <button onClick={onDelete} className="text-gray-500 hover:text-red-400 p-1" title="Delete">
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </td>
+      </tr>
+      {showSteps && hasSteps && (
+        <tr className="bg-gray-800/10">
+          <td colSpan={6} className="px-6 py-3">
+            <div className="space-y-2">
+              <span className="text-gray-500 text-[10px] uppercase tracking-wider font-medium">Diagnostic Path</span>
+              {entry.solutionSteps!.map((step, i) => (
+                <div key={i} className="flex items-start gap-2 text-xs">
+                  <span className={clsx(
+                    'px-1.5 py-0.5 rounded text-[10px] font-medium uppercase flex-shrink-0 mt-0.5',
+                    step.type === 'diagnostic' ? 'bg-blue-900/50 text-blue-400' :
+                    step.type === 'action' ? 'bg-orange-900/50 text-orange-400' :
+                    'bg-emerald-900/50 text-emerald-400'
+                  )}>
+                    {step.type}
+                  </span>
+                  <div>
+                    <code className="text-gray-300">{step.command}</code>
+                    <span className="text-gray-600 block mt-0.5">{step.reason}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -288,11 +343,11 @@ function AddEntryForm({ onClose }: { onClose: () => void }) {
         </div>
       </div>
       <div className="mb-3">
-        <label className="block text-xs text-gray-500 mb-1">Solution (command)</label>
+        <label className="block text-xs text-gray-500 mb-1">Solution (approach or command)</label>
         <input
           value={form.solution}
           onChange={(e) => setForm({ ...form, solution: e.target.value })}
-          placeholder="e.g., systemctl restart nginx"
+          placeholder="e.g., Find top CPU process and kill by name"
           className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm text-white font-mono"
         />
       </div>

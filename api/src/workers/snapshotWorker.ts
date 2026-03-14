@@ -9,8 +9,8 @@ import {
   alerts,
   remediationLog,
 } from "../db/schema.js";
-import { eq, desc, and } from "drizzle-orm";
-import { analyzeWithAI } from "../lib/claude.js";
+import { eq, desc, and, or } from "drizzle-orm";
+import { analyzeWithAI, generateDynamicRemediation } from "../lib/claude.js";
 
 const redisUrl =
   process.env.REDIS_URL || "redis://redis.railway.internal:6379";
@@ -313,11 +313,19 @@ const worker = new Worker(
       .from(monitoredServices)
       .where(eq(monitoredServices.agentId, agentId));
 
-    // 4. Fetch knowledge base entries for this platform
+    // 4. Fetch knowledge base entries: device-specific for this agent + global entries
     const kbEntries = await db
       .select()
       .from(knowledgeBase)
-      .where(eq(knowledgeBase.platform, agent.platform));
+      .where(
+        and(
+          eq(knowledgeBase.platform, agent.platform),
+          or(
+            eq(knowledgeBase.agentId, agentId),
+            eq(knowledgeBase.scope, "global")
+          )
+        )
+      );
 
     const kbMapped = kbEntries.map((k) => ({
       id: k.id,
@@ -427,8 +435,32 @@ const worker = new Worker(
         ? kbEntries.find((k) => k.id === issue.matchesKnownPattern)
         : null;
 
-      // Use KB solution command if issue has no suggestedCommand
-      const remediationCommand = issue.suggestedCommand || matchedKb?.solution || null;
+      // Determine remediation command:
+      // 1. Use issue's suggestedCommand if it exists (rule-based, like systemctl restart)
+      // 2. If KB has solutionSteps, dynamically generate the right command from current state
+      // 3. Fall back to static KB solution (only if it doesn't look like a hardcoded PID)
+      let remediationCommand = issue.suggestedCommand || null;
+
+      if (!remediationCommand && matchedKb) {
+        if (matchedKb.solutionSteps && Array.isArray(matchedKb.solutionSteps) && (matchedKb.solutionSteps as any[]).length > 0) {
+          // Dynamic: use AI to generate the right command from playbook + current snapshot
+          try {
+            remediationCommand = await generateDynamicRemediation(
+              { issuePattern: matchedKb.issuePattern, solution: matchedKb.solution, solutionSteps: matchedKb.solutionSteps },
+              snapshotData,
+              agent.hostname
+            );
+          } catch (err) {
+            console.error(`[worker] Dynamic remediation failed:`, err);
+          }
+        } else if (matchedKb.solution && !/\bkill\b.*\b\d{3,}\b/.test(matchedKb.solution)) {
+          // Static command — but reject if it has hardcoded PIDs
+          remediationCommand = matchedKb.solution;
+        } else if (matchedKb.solution) {
+          console.warn(`[worker] Skipping KB solution with hardcoded PID: ${matchedKb.solution}`);
+        }
+      }
+
       const shouldAutoRemediate =
         matchedKb?.autoApply && agent.autoRemediate && remediationCommand;
 

@@ -164,3 +164,81 @@ Respond with ONLY valid JSON (no markdown):
   console.log(`[claude] Analysis complete (${model})`);
   return result;
 }
+
+/**
+ * Given a KB entry with solutionSteps and current snapshot data,
+ * generate the correct dynamic remediation command for THIS instance.
+ * E.g., KB says "find top CPU process and kill by name" → AI looks at
+ * current snapshot, sees stress-ng at 95% CPU, returns "pkill -9 stress-ng"
+ */
+export async function generateDynamicRemediation(
+  kbEntry: {
+    issuePattern: string;
+    solution: string;
+    solutionSteps: unknown;
+  },
+  snapshot: Record<string, unknown>,
+  hostname: string
+): Promise<string | null> {
+  if (!client) return null;
+
+  const steps = kbEntry.solutionSteps as Array<{
+    type: string;
+    command: string;
+    reason: string;
+  }>;
+
+  if (!steps || steps.length === 0) return null;
+
+  const prompt = `You are an auto-remediation engine. A known issue has recurred and you need to generate the correct fix command for THIS specific instance.
+
+## Known Issue Pattern
+"${kbEntry.issuePattern}"
+
+## Documented Fix Approach
+${kbEntry.solution}
+
+## Diagnostic Path (from last time this was fixed)
+${steps.map((s, i) => `${i + 1}. [${s.type}] ${s.command} — ${s.reason}`).join("\n")}
+
+## Current Machine State (${hostname})
+Processes: ${JSON.stringify((snapshot.processes as any[])?.slice(0, 15) ?? [])}
+CPU: ${JSON.stringify(snapshot.cpu)}
+Memory: ${JSON.stringify(snapshot.memory)}
+Services: ${JSON.stringify(snapshot.services)}
+
+## Your task
+Based on the documented fix path and CURRENT machine state, output the SINGLE command that should be run right now to fix this issue.
+- Use process NAMES, not PIDs
+- Use pkill/killall/systemctl, never kill with a hardcoded PID
+- If you can't determine the right command from the current state, respond with "SKIP"
+
+Respond with ONLY the command (no explanation, no markdown):`;
+
+  try {
+    const response = await client.messages.create({
+      model: HAIKU_MODEL,
+      max_tokens: 200,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const text = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+
+    if (!text || text === "SKIP" || text.includes("SKIP")) {
+      console.log(`[claude] Dynamic remediation skipped for "${kbEntry.issuePattern}" — AI couldn't determine command`);
+      return null;
+    }
+
+    // Safety: reject if it contains a hardcoded PID (kill <number>)
+    if (/\bkill\b.*\b\d{3,}\b/.test(text) && !/pkill|killall/.test(text)) {
+      console.warn(`[claude] Rejected dynamic command with hardcoded PID: ${text}`);
+      return null;
+    }
+
+    console.log(`[claude] Dynamic remediation for "${kbEntry.issuePattern}": ${text}`);
+    return text;
+  } catch (err) {
+    console.error(`[claude] Dynamic remediation generation failed:`, err);
+    return null;
+  }
+}

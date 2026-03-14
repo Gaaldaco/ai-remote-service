@@ -196,12 +196,21 @@ export interface MonitoredService {
   createdAt: string;
 }
 
+export interface KBStep {
+  type: 'diagnostic' | 'action' | 'verify';
+  command: string;
+  reason: string;
+}
+
 export interface KBEntry {
   id: string;
+  agentId: string | null;
+  scope: 'device' | 'global';
   issuePattern: string;
   issueCategory: string;
   platform: string;
   solution: string;
+  solutionSteps: KBStep[] | null;
   description: string | null;
   successCount: number;
   failureCount: number;

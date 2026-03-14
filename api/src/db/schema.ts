@@ -113,10 +113,13 @@ export const alerts = pgTable("alerts", {
 
 export const knowledgeBase = pgTable("knowledge_base", {
   id: uuid("id").primaryKey().defaultRandom(),
+  agentId: uuid("agent_id").references(() => agents.id, { onDelete: "cascade" }), // null = global
+  scope: text("scope").notNull().default("device"), // "device" = specific machine, "global" = applies to all
   issuePattern: text("issue_pattern").notNull(),
   issueCategory: text("issue_category").notNull(),
   platform: text("platform").notNull().default("linux"), // linux | windows | all
-  solution: text("solution").notNull(), // the remediation command/procedure
+  solution: text("solution").notNull(), // summary of fix approach OR static command
+  solutionSteps: jsonb("solution_steps"), // diagnostic path: [{type, command, reason, output?}]
   description: text("description"), // human-readable explanation
   successCount: integer("success_count").notNull().default(0),
   failureCount: integer("failure_count").notNull().default(0),

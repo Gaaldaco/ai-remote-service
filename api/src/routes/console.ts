@@ -212,10 +212,18 @@ Fix (requires user approval):
 {"command": "the fix command", "reason": "how this fixes the issue"}
 \`\`\`
 
-When fix is verified working, document it:
+When fix is verified working, document the FULL diagnostic path — not just the final command:
 \`\`\`solution
-{"pattern": "issue description", "command": "fix command", "description": "explanation"}
+{"pattern": "issue description", "command": "summary of fix approach", "description": "explanation", "steps": [{"type": "diagnostic", "command": "the diagnostic command you ran", "reason": "why"}, {"type": "action", "command": "the fix command using process names", "reason": "why"}, {"type": "verify", "command": "the verification command", "reason": "how you confirmed it worked"}]}
 \`\`\`
+
+CRITICAL RULES for solution blocks:
+- "steps" MUST include the full path: diagnostics that identified the problem, the fix, and verification
+- "command" is a SUMMARY of the approach (e.g., "Find top CPU process and kill by name"), NOT a raw command
+- NEVER use hardcoded PIDs in any step — PIDs change every time
+- Use process names: "pkill -9 stress-ng" or "killall stress-ng", NOT "kill -9 218732"
+- Use "systemctl restart <service>" not "kill <pid>"
+- Steps will be replayed dynamically next time this issue occurs
 
 When the issue is fully resolved, emit this to close out:
 \`\`\`resolved
@@ -243,10 +251,15 @@ When you want to run a diagnostic that doesn't change anything, use:
 {"command": "the read-only command", "reason": "what we're checking"}
 \`\`\`
 
-When you've identified a working solution to document, use:
+When you've identified a working solution to document, include the diagnostic path:
 \`\`\`solution
-{"pattern": "issue description", "command": "fix command", "description": "explanation"}
+{"pattern": "issue description", "command": "summary of fix approach", "description": "explanation", "steps": [{"type": "diagnostic", "command": "cmd", "reason": "why"}, {"type": "action", "command": "the fix", "reason": "why"}, {"type": "verify", "command": "cmd", "reason": "confirm"}]}
 \`\`\`
+
+CRITICAL: In solution blocks:
+- "command" is a SUMMARY of the approach, not a raw command
+- "steps" must include the full diagnostic path that led to the fix
+- NEVER use hardcoded PIDs — use process names (pkill, killall, systemctl)
 
 IMPORTANT SAFETY RULES:
 - NEVER suggest destructive commands (rm -rf /, dd, mkfs, format, DROP DATABASE, reboot, shutdown, halt, init 0)
@@ -390,15 +403,44 @@ ${kbEntries.map((k) => `- ${k.issuePattern}: ${k.solution}`).join("\n") || "None
   if (solutionMatch) {
     try {
       const solution = JSON.parse(solutionMatch[1]);
-      await db.insert(knowledgeBase).values({
-        issuePattern: solution.pattern,
-        issueCategory: "console",
-        platform: agent?.platform ?? "linux",
-        solution: solution.command,
-        description: solution.description,
-        autoApply: autopilot ? true : false, // auto-apply if created during autopilot
+
+      // Dedup check: look for existing KB entries for this agent with similar pattern
+      const existingKbs = await db.select().from(knowledgeBase).where(
+        eq(knowledgeBase.agentId, agentId)
+      );
+      const STOP = new Set(["the","a","an","is","at","on","in","to","of","and","or","for"]);
+      const getWords = (t: string) => t.toLowerCase().split(/\W+/).filter((w: string) => w.length > 2 && !STOP.has(w));
+      const patternWords = getWords(solution.pattern);
+      const existingDup = existingKbs.find((e) => {
+        const eWords = getWords(e.issuePattern);
+        const overlap = patternWords.filter((w: string) => eWords.some((ew: string) => ew.includes(w) || w.includes(ew))).length;
+        const union = new Set([...patternWords, ...eWords]).size;
+        return union > 0 && (overlap / union) >= 0.6;
       });
-      console.log(`[console] KB entry created: ${solution.pattern}`);
+
+      if (existingDup) {
+        // Update existing instead of creating duplicate
+        await db.update(knowledgeBase).set({
+          solution: solution.command,
+          solutionSteps: solution.steps ?? existingDup.solutionSteps,
+          description: solution.description ?? existingDup.description,
+          updatedAt: new Date(),
+        }).where(eq(knowledgeBase.id, existingDup.id));
+        console.log(`[console] KB dedup: updated existing "${existingDup.issuePattern}"`);
+      } else {
+        await db.insert(knowledgeBase).values({
+          agentId,
+          scope: "device",
+          issuePattern: solution.pattern,
+          issueCategory: "console",
+          platform: agent?.platform ?? "linux",
+          solution: solution.command,
+          solutionSteps: solution.steps ?? null,
+          description: solution.description,
+          autoApply: autopilot ? true : false,
+        });
+      }
+      console.log(`[console] KB entry created: ${solution.pattern} (${(solution.steps ?? []).length} steps)`);
     } catch {
       // ignore parse errors
     }
