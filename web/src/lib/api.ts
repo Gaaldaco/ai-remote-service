@@ -62,17 +62,25 @@ export const api = {
       request<{ deleted: boolean }>(`/api/knowledge-base/${id}`, { method: 'DELETE' }),
   },
   console: {
-    messages: (agentId: string) =>
-      request<ConsoleMessage[]>(`/api/console/${agentId}/messages`),
-    execute: (agentId: string, command: string) =>
+    sessions: (agentId: string) =>
+      request<ConsoleSession[]>(`/api/console/${agentId}/sessions`),
+    createSession: (agentId: string) =>
+      request<ConsoleSession>(`/api/console/${agentId}/sessions`, { method: 'POST' }),
+    deleteSession: (agentId: string, sessionId: string) =>
+      request<{ deleted: boolean }>(`/api/console/${agentId}/sessions/${sessionId}`, { method: 'DELETE' }),
+    clearAllSessions: (agentId: string) =>
+      request<{ deleted: boolean; count: number }>(`/api/console/${agentId}/sessions`, { method: 'DELETE' }),
+    messages: (agentId: string, sessionId?: string) =>
+      request<ConsoleMessage[]>(`/api/console/${agentId}/messages${sessionId ? `?sessionId=${sessionId}` : ''}`),
+    execute: (agentId: string, command: string, sessionId?: string) =>
       request<{ id: string; status: string }>(`/api/console/${agentId}/execute`, {
-        method: 'POST', body: JSON.stringify({ command }),
+        method: 'POST', body: JSON.stringify({ command, sessionId }),
       }),
     result: (agentId: string, remediationId: string) =>
       request<{ status: string; output?: string; success?: boolean }>(`/api/console/${agentId}/result/${remediationId}`),
-    ask: (agentId: string, message: string, terminalHistory: string) =>
-      request<{ response: string; model: string; suggestion?: { command: string; reason: string } }>(`/api/console/${agentId}/ask`, {
-        method: 'POST', body: JSON.stringify({ message, terminalHistory }),
+    ask: (agentId: string, message: string, terminalHistory: string, sessionId?: string) =>
+      request<{ response: string; model: string; suggestion?: { command: string; reason: string }; sessionId: string }>(`/api/console/${agentId}/ask`, {
+        method: 'POST', body: JSON.stringify({ message, terminalHistory, sessionId }),
       }),
   },
   remediation: {
@@ -193,12 +201,23 @@ export interface KBEntry {
   updatedAt: string;
 }
 
+export interface ConsoleSession {
+  id: string;
+  agentId: string;
+  summary: string | null;
+  tokenEstimate: number;
+  createdAt: string;
+  lastActiveAt: string;
+}
+
 export interface ConsoleMessage {
   id: string;
   agentId: string;
+  sessionId: string | null;
   role: 'user' | 'assistant' | 'command' | 'output';
   content: string;
   model: string | null;
+  tokenEstimate: number | null;
   remediationId: string | null;
   createdAt: string;
 }

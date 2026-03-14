@@ -141,6 +141,19 @@ export const remediationLog = pgTable("remediation_log", {
   executedAt: timestamp("executed_at").defaultNow().notNull(),
 });
 
+// ─── Console Sessions ───────────────────────────────────────────────────────
+
+export const consoleSessions = pgTable("console_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  agentId: uuid("agent_id")
+    .notNull()
+    .references(() => agents.id, { onDelete: "cascade" }),
+  summary: text("summary"), // compressed context from older messages
+  tokenEstimate: integer("token_estimate").notNull().default(0), // running token count
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  lastActiveAt: timestamp("last_active_at").defaultNow().notNull(),
+});
+
 // ─── Console Messages ───────────────────────────────────────────────────────
 
 export const consoleRoleEnum = pgEnum("console_role", [
@@ -155,9 +168,12 @@ export const consoleMessages = pgTable("console_messages", {
   agentId: uuid("agent_id")
     .notNull()
     .references(() => agents.id, { onDelete: "cascade" }),
+  sessionId: uuid("session_id")
+    .references(() => consoleSessions.id, { onDelete: "cascade" }),
   role: consoleRoleEnum("role").notNull(),
   content: text("content").notNull(),
   model: text("model"),
+  tokenEstimate: integer("token_estimate").default(0), // estimated tokens for this message
   remediationId: uuid("remediation_id").references(() => remediationLog.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

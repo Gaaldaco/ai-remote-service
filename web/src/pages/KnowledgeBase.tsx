@@ -25,19 +25,19 @@ export default function KnowledgeBase() {
   });
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
+    <div className="p-6">
+      <div className="flex items-center justify-between mb-5">
         <div>
-          <h1 className="text-2xl font-bold text-white">Knowledge Base</h1>
-          <p className="text-gray-400 text-sm mt-1">
-            Learned solutions from past incidents
+          <h1 className="text-xl font-bold text-white">Knowledge Base</h1>
+          <p className="text-gray-500 text-xs mt-1">
+            {entries?.length ?? 0} solution{(entries?.length ?? 0) !== 1 ? 's' : ''} documented
           </p>
         </div>
         <button
           onClick={() => setShowForm(!showForm)}
-          className="flex items-center gap-2 bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-600"
+          className="flex items-center gap-1.5 bg-emerald-500 text-white px-3 py-1.5 rounded-md text-sm font-medium hover:bg-emerald-600"
         >
-          <Plus className="w-4 h-4" />
+          <Plus className="w-3.5 h-3.5" />
           Add Entry
         </button>
       </div>
@@ -45,78 +45,86 @@ export default function KnowledgeBase() {
       {showForm && <AddEntryForm onClose={() => setShowForm(false)} />}
 
       {isLoading ? (
-        <div className="text-gray-400 text-center py-20">Loading...</div>
+        <div className="text-gray-500 text-center py-20 text-sm">Loading...</div>
+      ) : (entries ?? []).length > 0 ? (
+        <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-800 text-gray-500 text-xs uppercase tracking-wider">
+                <th className="text-left px-4 py-3">Pattern</th>
+                <th className="text-left px-4 py-3">Category</th>
+                <th className="text-left px-4 py-3">Solution</th>
+                <th className="text-left px-4 py-3">Success Rate</th>
+                <th className="text-left px-4 py-3">Auto-Apply</th>
+                <th className="text-right px-4 py-3">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(entries ?? []).map((entry) => {
+                const total = entry.successCount + entry.failureCount;
+                const rate = total > 0 ? Math.round((entry.successCount / total) * 100) : null;
+
+                return (
+                  <tr key={entry.id} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                    <td className="px-4 py-3">
+                      <span className="text-white text-xs font-medium">{entry.issuePattern}</span>
+                      {entry.description && (
+                        <span className="text-gray-500 text-xs block mt-0.5">{entry.description}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded">
+                        {entry.issueCategory}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <code className="text-emerald-400 text-xs">{entry.solution}</code>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-400">
+                      {rate !== null ? (
+                        <span className={rate >= 70 ? 'text-emerald-400' : rate >= 40 ? 'text-yellow-400' : 'text-red-400'}>
+                          {rate}% ({total})
+                        </span>
+                      ) : (
+                        <span className="text-gray-600">-</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => toggleAutoApply.mutate(entry)}
+                        className={clsx(
+                          'flex items-center gap-1 text-xs',
+                          entry.autoApply ? 'text-emerald-400' : 'text-gray-600'
+                        )}
+                      >
+                        {entry.autoApply ? (
+                          <ToggleRight className="w-4 h-4" />
+                        ) : (
+                          <ToggleLeft className="w-4 h-4" />
+                        )}
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        onClick={() => deleteMutation.mutate(entry.id)}
+                        className="text-gray-500 hover:text-red-400 p-1"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       ) : (
-        <div className="space-y-3">
-          {(entries ?? []).map((entry) => (
-            <div key={entry.id} className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <BookOpen className="w-4 h-4 text-emerald-400" />
-                    <span className="text-white font-semibold text-sm">{entry.issuePattern}</span>
-                    <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded">
-                      {entry.issueCategory}
-                    </span>
-                    <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded">
-                      {entry.platform}
-                    </span>
-                  </div>
-                  {entry.description && (
-                    <p className="text-gray-400 text-sm mt-1">{entry.description}</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={() => toggleAutoApply.mutate(entry)}
-                    className={clsx(
-                      'flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg',
-                      entry.autoApply
-                        ? 'bg-emerald-500/10 text-emerald-400'
-                        : 'bg-gray-800 text-gray-400'
-                    )}
-                  >
-                    {entry.autoApply ? (
-                      <ToggleRight className="w-4 h-4" />
-                    ) : (
-                      <ToggleLeft className="w-4 h-4" />
-                    )}
-                    Auto-Apply
-                  </button>
-                  <button
-                    onClick={() => deleteMutation.mutate(entry.id)}
-                    className="text-red-400 hover:text-red-300 p-1.5"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              <div className="bg-gray-800 rounded-lg p-3 mb-3">
-                <span className="text-xs text-gray-500 block mb-1">Solution:</span>
-                <code className="text-emerald-300 text-xs">{entry.solution}</code>
-              </div>
-
-              <div className="flex gap-4 text-xs text-gray-500">
-                <span className="text-emerald-400">{entry.successCount} successes</span>
-                <span className="text-red-400">{entry.failureCount} failures</span>
-                <span>
-                  {entry.successCount + entry.failureCount > 0
-                    ? `${Math.round((entry.successCount / (entry.successCount + entry.failureCount)) * 100)}% success rate`
-                    : 'No executions yet'}
-                </span>
-              </div>
-            </div>
-          ))}
-          {(!entries || entries.length === 0) && (
-            <div className="text-center py-20 bg-gray-900 rounded-xl border border-gray-800">
-              <BookOpen className="w-12 h-12 text-gray-600 mx-auto mb-4" />
-              <h3 className="text-lg text-white mb-2">Knowledge base is empty</h3>
-              <p className="text-gray-400 text-sm">
-                Solutions will be automatically added when AI successfully remediates issues.
-              </p>
-            </div>
-          )}
+        <div className="text-center py-16 bg-gray-900 border border-gray-800 rounded-lg">
+          <BookOpen className="w-8 h-8 text-gray-600 mx-auto mb-3" />
+          <h3 className="text-white font-medium mb-1">No solutions documented</h3>
+          <p className="text-gray-500 text-sm">
+            Add entries manually or they'll be created automatically when AI finds solutions.
+          </p>
         </div>
       )}
     </div>
@@ -143,24 +151,24 @@ function AddEntryForm({ onClose }: { onClose: () => void }) {
   });
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">
-      <h3 className="text-white font-semibold mb-4">New Knowledge Base Entry</h3>
-      <div className="grid grid-cols-2 gap-4 mb-4">
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-5 mb-4">
+      <h3 className="text-white text-sm font-semibold mb-4">New Entry</h3>
+      <div className="grid grid-cols-2 gap-3 mb-3">
         <div>
-          <label className="block text-sm text-gray-400 mb-1">Issue Pattern</label>
+          <label className="block text-xs text-gray-500 mb-1">Issue Pattern</label>
           <input
             value={form.issuePattern}
             onChange={(e) => setForm({ ...form, issuePattern: e.target.value })}
             placeholder="e.g., nginx service down"
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
+            className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm text-white"
           />
         </div>
         <div>
-          <label className="block text-sm text-gray-400 mb-1">Category</label>
+          <label className="block text-xs text-gray-500 mb-1">Category</label>
           <select
             value={form.issueCategory}
             onChange={(e) => setForm({ ...form, issueCategory: e.target.value })}
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-300"
+            className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm text-gray-300"
           >
             <option value="performance">Performance</option>
             <option value="security">Security</option>
@@ -169,25 +177,25 @@ function AddEntryForm({ onClose }: { onClose: () => void }) {
           </select>
         </div>
       </div>
-      <div className="mb-4">
-        <label className="block text-sm text-gray-400 mb-1">Solution (command)</label>
+      <div className="mb-3">
+        <label className="block text-xs text-gray-500 mb-1">Solution (command)</label>
         <input
           value={form.solution}
           onChange={(e) => setForm({ ...form, solution: e.target.value })}
           placeholder="e.g., systemctl restart nginx"
-          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono"
+          className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm text-white font-mono"
         />
       </div>
       <div className="mb-4">
-        <label className="block text-sm text-gray-400 mb-1">Description (optional)</label>
+        <label className="block text-xs text-gray-500 mb-1">Description (optional)</label>
         <input
           value={form.description}
           onChange={(e) => setForm({ ...form, description: e.target.value })}
-          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
+          className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm text-white"
         />
       </div>
       <div className="flex items-center justify-between">
-        <label className="flex items-center gap-2 text-sm text-gray-400">
+        <label className="flex items-center gap-2 text-xs text-gray-400">
           <input
             type="checkbox"
             checked={form.autoApply}
@@ -197,11 +205,11 @@ function AddEntryForm({ onClose }: { onClose: () => void }) {
           Auto-apply when matched
         </label>
         <div className="flex gap-2">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-400 hover:text-white">Cancel</button>
+          <button onClick={onClose} className="px-3 py-1.5 text-xs text-gray-400 hover:text-white">Cancel</button>
           <button
             onClick={() => createMutation.mutate()}
             disabled={!form.issuePattern || !form.solution}
-            className="bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-600 disabled:opacity-50"
+            className="bg-emerald-500 text-white px-3 py-1.5 rounded-md text-xs font-medium hover:bg-emerald-600 disabled:opacity-50"
           >
             Create
           </button>

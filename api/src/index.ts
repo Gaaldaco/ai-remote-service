@@ -10,7 +10,7 @@ import alertsRouter from "./routes/alerts.js";
 import servicesRouter from "./routes/services.js";
 import knowledgeBaseRouter from "./routes/knowledgeBase.js";
 import remediationRouter from "./routes/remediation.js";
-import consoleRouter from "./routes/console.js";
+import consoleRouter, { purgeOldSessions } from "./routes/console.js";
 import { errorHandler } from "./middleware/error.js";
 import { startHeartbeatMonitor } from "./lib/heartbeat.js";
 
@@ -100,3 +100,7 @@ export function broadcast(event: string, data: unknown) {
 
 // ─── Background tasks ────────────────────────────────────────────────────────
 startHeartbeatMonitor();
+
+// Purge expired console sessions every hour
+setInterval(purgeOldSessions, 60 * 60 * 1000);
+purgeOldSessions(); // run once on startup

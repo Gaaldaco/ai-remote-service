@@ -10,12 +10,207 @@ import {
   remediationLog,
 } from "../db/schema.js";
 import { eq, desc, and } from "drizzle-orm";
-import { analyzeSnapshot } from "../lib/claude.js";
+import { analyzeWithAI } from "../lib/claude.js";
 
 const redisUrl =
   process.env.REDIS_URL || "redis://redis.railway.internal:6379";
 
 const connection = { url: redisUrl };
+
+// ─── Thresholds (rule-based, no AI needed) ──────────────────────────────────
+
+const THRESHOLDS = {
+  cpu: { warning: 80, critical: 95 },
+  memory: { warning: 85, critical: 95 },
+  disk: { warning: 85, critical: 95 },
+  authFailures: { warning: 5, critical: 20 }, // per snapshot window
+};
+
+// ─── Types ──────────────────────────────────────────────────────────────────
+
+interface Issue {
+  category: string;
+  severity: "info" | "warning" | "critical";
+  description: string;
+  suggestedCommand: string | null;
+  matchesKnownPattern: string | null;
+}
+
+interface AnalysisResult {
+  healthScore: number;
+  summary: string;
+  issues: Issue[];
+  usedAI: boolean;
+}
+
+// ─── Rule-based analysis (free, instant) ────────────────────────────────────
+
+function analyzeLocally(
+  snapshot: Record<string, any>,
+  hostname: string,
+  monitored: Array<{ serviceName: string }>,
+  kbEntries: Array<{ id: string; issuePattern: string; solution: string; successCount: number; failureCount: number }>
+): AnalysisResult {
+  const issues: Issue[] = [];
+  let healthScore = 100;
+
+  // ── CPU ──
+  const cpuUsage = snapshot.cpu?.usagePercent ?? 0;
+  if (cpuUsage >= THRESHOLDS.cpu.critical) {
+    issues.push({
+      category: "performance",
+      severity: "critical",
+      description: `CPU usage critically high at ${cpuUsage.toFixed(1)}%`,
+      suggestedCommand: "top -b -n 1 -o %CPU | head -20",
+      matchesKnownPattern: findKbMatch("high cpu", kbEntries),
+    });
+    healthScore -= 30;
+  } else if (cpuUsage >= THRESHOLDS.cpu.warning) {
+    issues.push({
+      category: "performance",
+      severity: "warning",
+      description: `CPU usage elevated at ${cpuUsage.toFixed(1)}%`,
+      suggestedCommand: "top -b -n 1 -o %CPU | head -20",
+      matchesKnownPattern: findKbMatch("high cpu", kbEntries),
+    });
+    healthScore -= 10;
+  }
+
+  // ── Memory ──
+  const memUsage = snapshot.memory?.usagePercent ?? 0;
+  if (memUsage >= THRESHOLDS.memory.critical) {
+    issues.push({
+      category: "performance",
+      severity: "critical",
+      description: `Memory usage critically high at ${memUsage.toFixed(1)}%`,
+      suggestedCommand: "ps aux --sort=-%mem | head -15",
+      matchesKnownPattern: findKbMatch("high memory", kbEntries),
+    });
+    healthScore -= 30;
+  } else if (memUsage >= THRESHOLDS.memory.warning) {
+    issues.push({
+      category: "performance",
+      severity: "warning",
+      description: `Memory usage elevated at ${memUsage.toFixed(1)}%`,
+      suggestedCommand: "ps aux --sort=-%mem | head -15",
+      matchesKnownPattern: findKbMatch("high memory", kbEntries),
+    });
+    healthScore -= 10;
+  }
+
+  // ── Disk ──
+  const disks = (snapshot.disk as any[]) ?? [];
+  for (const d of disks) {
+    const usage = d.usagePercent ?? 0;
+    if (usage >= THRESHOLDS.disk.critical) {
+      issues.push({
+        category: "performance",
+        severity: "critical",
+        description: `Disk ${d.mountpoint} critically full at ${usage.toFixed(0)}%`,
+        suggestedCommand: `du -sh ${d.mountpoint}/* 2>/dev/null | sort -rh | head -10`,
+        matchesKnownPattern: findKbMatch("high disk", kbEntries),
+      });
+      healthScore -= 25;
+    } else if (usage >= THRESHOLDS.disk.warning) {
+      issues.push({
+        category: "performance",
+        severity: "warning",
+        description: `Disk ${d.mountpoint} usage elevated at ${usage.toFixed(0)}%`,
+        suggestedCommand: `du -sh ${d.mountpoint}/* 2>/dev/null | sort -rh | head -10`,
+        matchesKnownPattern: findKbMatch("high disk", kbEntries),
+      });
+      healthScore -= 5;
+    }
+  }
+
+  // ── Auth failures ──
+  const authLogs = (snapshot.authLogs as any[]) ?? [];
+  const failures = authLogs.filter((l: any) => l.success === false);
+  if (failures.length >= THRESHOLDS.authFailures.critical) {
+    issues.push({
+      category: "security",
+      severity: "critical",
+      description: `${failures.length} authentication failures detected`,
+      suggestedCommand: "journalctl -u sshd --since '1 hour ago' --no-pager | tail -30",
+      matchesKnownPattern: findKbMatch("auth failure", kbEntries),
+    });
+    healthScore -= 20;
+  } else if (failures.length >= THRESHOLDS.authFailures.warning) {
+    issues.push({
+      category: "security",
+      severity: "warning",
+      description: `${failures.length} authentication failures detected`,
+      suggestedCommand: "journalctl -u sshd --since '1 hour ago' --no-pager | tail -30",
+      matchesKnownPattern: findKbMatch("auth failure", kbEntries),
+    });
+    healthScore -= 5;
+  }
+
+  // ── Pending security updates ──
+  const updates = (snapshot.pendingUpdates as any[]) ?? [];
+  if (updates.length > 0) {
+    issues.push({
+      category: "update",
+      severity: updates.length > 10 ? "warning" : "info",
+      description: `${updates.length} pending package update(s)`,
+      suggestedCommand: null,
+      matchesKnownPattern: null,
+    });
+    if (updates.length > 10) healthScore -= 5;
+  }
+
+  // ── Monitored services ──
+  const services = (snapshot.services as any[]) ?? [];
+  const serviceIssues: Issue[] = [];
+  for (const mon of monitored) {
+    const svc = services.find((s: any) => s.name === mon.serviceName);
+    if (!svc || svc.status === "failed" || svc.status === "stopped" || svc.status === "dead") {
+      serviceIssues.push({
+        category: "availability",
+        severity: "critical",
+        description: `Monitored service "${mon.serviceName}" is ${svc?.status ?? "not found"} on ${hostname}`,
+        suggestedCommand: `systemctl restart ${mon.serviceName}`,
+        matchesKnownPattern: findKbMatch(mon.serviceName, kbEntries),
+      });
+      healthScore -= 20;
+    }
+  }
+  issues.push(...serviceIssues);
+
+  healthScore = Math.max(0, healthScore);
+
+  const summaryParts: string[] = [];
+  if (issues.length === 0) {
+    summaryParts.push("All systems nominal.");
+  } else {
+    const crits = issues.filter((i) => i.severity === "critical").length;
+    const warns = issues.filter((i) => i.severity === "warning").length;
+    if (crits > 0) summaryParts.push(`${crits} critical issue(s)`);
+    if (warns > 0) summaryParts.push(`${warns} warning(s)`);
+    summaryParts.push(`Health score: ${healthScore}/100`);
+  }
+
+  return {
+    healthScore,
+    summary: summaryParts.join(". ") + ".",
+    issues,
+    usedAI: false,
+  };
+}
+
+function findKbMatch(
+  pattern: string,
+  kbEntries: Array<{ id: string; issuePattern: string }>
+): string | null {
+  const lower = pattern.toLowerCase();
+  const match = kbEntries.find((k) =>
+    k.issuePattern.toLowerCase().includes(lower) ||
+    lower.includes(k.issuePattern.toLowerCase())
+  );
+  return match?.id ?? null;
+}
+
+// ─── Worker ─────────────────────────────────────────────────────────────────
 
 console.log("[worker] Starting snapshot analysis worker...");
 
@@ -49,58 +244,92 @@ const worker = new Worker(
       return;
     }
 
-    // 3. Fetch recent snapshot history (last 5)
-    const recentHistory = await db
-      .select({
-        healthScore: machineSnapshots.healthScore,
-        timestamp: machineSnapshots.timestamp,
-      })
-      .from(machineSnapshots)
-      .where(eq(machineSnapshots.agentId, agentId))
-      .orderBy(desc(machineSnapshots.timestamp))
-      .limit(5);
-
-    // 4. Fetch monitored services
+    // 3. Fetch monitored services
     const monitored = await db
       .select({ serviceName: monitoredServices.serviceName })
       .from(monitoredServices)
       .where(eq(monitoredServices.agentId, agentId));
 
-    // 5. Fetch knowledge base entries for this platform
+    // 4. Fetch knowledge base entries for this platform
     const kbEntries = await db
       .select()
       .from(knowledgeBase)
       .where(eq(knowledgeBase.platform, agent.platform));
 
-    // 6. Run AI analysis
-    const analysis = await analyzeSnapshot(
-      agent.name,
-      agent.hostname,
-      agent.os,
-      {
-        cpu: snapshot.cpu,
-        memory: snapshot.memory,
-        disk: snapshot.disk,
-        network: snapshot.network,
-        processes: snapshot.processes,
-        openPorts: snapshot.openPorts,
-        users: snapshot.users,
-        authLogs: snapshot.authLogs,
-        pendingUpdates: snapshot.pendingUpdates,
-        services: snapshot.services,
-      },
-      monitored,
-      recentHistory,
-      kbEntries.map((k) => ({
-        id: k.id,
-        issuePattern: k.issuePattern,
-        solution: k.solution,
-        successCount: k.successCount,
-        failureCount: k.failureCount,
-      }))
+    const kbMapped = kbEntries.map((k) => ({
+      id: k.id,
+      issuePattern: k.issuePattern,
+      solution: k.solution,
+      successCount: k.successCount,
+      failureCount: k.failureCount,
+    }));
+
+    // 5. Rule-based analysis first (free, instant)
+    const snapshotData = {
+      cpu: snapshot.cpu,
+      memory: snapshot.memory,
+      disk: snapshot.disk,
+      network: snapshot.network,
+      processes: snapshot.processes,
+      openPorts: snapshot.openPorts,
+      users: snapshot.users,
+      authLogs: snapshot.authLogs,
+      pendingUpdates: snapshot.pendingUpdates,
+      services: snapshot.services,
+    };
+
+    const analysis = analyzeLocally(snapshotData, agent.hostname, monitored, kbMapped);
+
+    // 6. Only call AI if there are critical issues or monitored service failures
+    const hasCritical = analysis.issues.some((i) => i.severity === "critical");
+    const hasServiceDown = analysis.issues.some(
+      (i) => i.category === "availability" && i.severity === "critical"
     );
 
-    // 7. Update snapshot with AI results
+    if (hasCritical || hasServiceDown) {
+      console.log(
+        `[worker] Critical issues detected — escalating to AI for deeper analysis`
+      );
+
+      try {
+        const aiResult = await analyzeWithAI(
+          agent.name,
+          agent.hostname,
+          agent.os,
+          snapshotData,
+          monitored,
+          kbMapped,
+          analysis // pass local analysis so AI has context on what was already found
+        );
+
+        if (aiResult) {
+          // Merge: AI overrides health score and summary, combine issues
+          analysis.healthScore = aiResult.healthScore;
+          analysis.summary = aiResult.summary;
+          analysis.usedAI = true;
+
+          // Add any AI-found issues that aren't duplicates of local ones
+          for (const aiIssue of aiResult.issues) {
+            const isDuplicate = analysis.issues.some(
+              (local) =>
+                local.category === aiIssue.category &&
+                local.description === aiIssue.description
+            );
+            if (!isDuplicate) {
+              analysis.issues.push(aiIssue);
+            }
+          }
+        }
+      } catch (err) {
+        console.error(`[worker] AI analysis failed, using local results:`, err);
+      }
+    } else {
+      console.log(
+        `[worker] No critical issues — skipping AI, using local analysis (score=${analysis.healthScore})`
+      );
+    }
+
+    // 7. Update snapshot with results
     await db
       .update(machineSnapshots)
       .set({
@@ -109,18 +338,10 @@ const worker = new Worker(
       })
       .where(eq(machineSnapshots.id, snapshotId));
 
-    // 8. Process issues
+    // 8. Create alerts for issues (with dedup)
     for (const issue of analysis.issues) {
-      // Check if there's a matching KB entry for auto-remediation
-      const matchedKb = issue.matchesKnownPattern
-        ? kbEntries.find((k) => k.id === issue.matchesKnownPattern)
-        : null;
-
-      const shouldAutoRemediate =
-        matchedKb?.autoApply && agent.autoRemediate && issue.suggestedCommand;
-
-      // Check for existing unresolved alert with same type and message
       const alertType = mapCategoryToAlertType(issue.category);
+
       const [existingAlert] = await db
         .select()
         .from(alerts)
@@ -135,11 +356,17 @@ const worker = new Worker(
         .limit(1);
 
       if (existingAlert) {
-        console.log(`[worker] Skipping duplicate alert: ${issue.description}`);
-        continue;
+        continue; // skip duplicate
       }
 
-      // Create alert
+      // Check for auto-remediation
+      const matchedKb = issue.matchesKnownPattern
+        ? kbEntries.find((k) => k.id === issue.matchesKnownPattern)
+        : null;
+
+      const shouldAutoRemediate =
+        matchedKb?.autoApply && agent.autoRemediate && issue.suggestedCommand;
+
       const [alert] = await db
         .insert(alerts)
         .values({
@@ -152,11 +379,11 @@ const worker = new Worker(
             suggestedCommand: issue.suggestedCommand,
             matchedKbId: issue.matchesKnownPattern,
             autoRemediate: shouldAutoRemediate,
+            analyzedByAI: analysis.usedAI,
           },
         })
         .returning();
 
-      // Auto-remediate if conditions are met
       if (shouldAutoRemediate && issue.suggestedCommand) {
         console.log(
           `[worker] Auto-remediating: ${issue.suggestedCommand} on ${agent.hostname}`
@@ -171,46 +398,8 @@ const worker = new Worker(
       }
     }
 
-    // 9. Check monitored services
-    const services = (snapshot.services as any[]) ?? [];
-    for (const mon of monitored) {
-      const svc = services.find(
-        (s: any) => s.name === mon.serviceName
-      );
-
-      if (!svc || svc.status === "failed" || svc.status === "stopped") {
-        const serviceMessage = `Monitored service "${mon.serviceName}" is ${svc?.status ?? "not found"} on ${agent.hostname}`;
-
-        const [existingServiceAlert] = await db
-          .select()
-          .from(alerts)
-          .where(
-            and(
-              eq(alerts.agentId, agent.id),
-              eq(alerts.type, "service_down"),
-              eq(alerts.message, serviceMessage),
-              eq(alerts.resolved, false)
-            )
-          )
-          .limit(1);
-
-        if (existingServiceAlert) {
-          console.log(`[worker] Skipping duplicate service alert: ${serviceMessage}`);
-          continue;
-        }
-
-        await db.insert(alerts).values({
-          agentId: agent.id,
-          snapshotId,
-          type: "service_down",
-          severity: "critical",
-          message: serviceMessage,
-        });
-      }
-    }
-
     console.log(
-      `[worker] Analysis complete for ${agent.hostname}: score=${analysis.healthScore}, issues=${analysis.issues.length}`
+      `[worker] Analysis complete for ${agent.hostname}: score=${analysis.healthScore}, issues=${analysis.issues.length}, ai=${analysis.usedAI}`
     );
   },
   {

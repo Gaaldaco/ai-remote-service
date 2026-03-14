@@ -1,13 +1,28 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link, useNavigate } from 'react-router-dom';
 import { api, type Agent } from '@/lib/api';
 import StatusBadge from '@/components/StatusBadge';
 import HealthScore from '@/components/HealthScore';
-import { Monitor, AlertTriangle, Shield, Clock, CheckCircle } from 'lucide-react';
+import {
+  Monitor, AlertTriangle, Search, Terminal, Trash2,
+  ChevronUp, ChevronDown, MoreVertical, Plus, RefreshCw,
+} from 'lucide-react';
 import clsx from 'clsx';
+
+type SortField = 'name' | 'status' | 'os' | 'lastSeen';
+type SortDir = 'asc' | 'desc';
 
 export default function Dashboard() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [sortField, setSortField] = useState<SortField>('name');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const [deleteConfirm, setDeleteConfirm] = useState<Agent | null>(null);
+  const [actionMenu, setActionMenu] = useState<string | null>(null);
+
   const { data: agents, isLoading } = useQuery({
     queryKey: ['agents'],
     queryFn: api.agents.list,
@@ -16,192 +31,394 @@ export default function Dashboard() {
     queryKey: ['alertSummary'],
     queryFn: api.alerts.summary,
   });
-  const { data: activeAlerts } = useQuery({
-    queryKey: ['activeAlerts'],
-    queryFn: () => api.alerts.list({ resolved: 'false', limit: 20 }),
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.agents.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      queryClient.invalidateQueries({ queryKey: ['alertSummary'] });
+      setDeleteConfirm(null);
+    },
   });
+
+  // Filter and sort
+  const filtered = (agents ?? [])
+    .filter((a) => {
+      if (search) {
+        const q = search.toLowerCase();
+        if (
+          !a.name.toLowerCase().includes(q) &&
+          !a.hostname.toLowerCase().includes(q) &&
+          !a.os.toLowerCase().includes(q)
+        )
+          return false;
+      }
+      if (statusFilter && a.status !== statusFilter) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      let cmp = 0;
+      switch (sortField) {
+        case 'name':
+          cmp = a.name.localeCompare(b.name);
+          break;
+        case 'status':
+          cmp = a.status.localeCompare(b.status);
+          break;
+        case 'os':
+          cmp = a.os.localeCompare(b.os);
+          break;
+        case 'lastSeen':
+          cmp = (a.lastSeen ?? '').localeCompare(b.lastSeen ?? '');
+          break;
+      }
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
 
   const onlineCount = agents?.filter((a) => a.status === 'online').length ?? 0;
   const offlineCount = agents?.filter((a) => a.status === 'offline').length ?? 0;
+  const degradedCount = agents?.filter((a) => a.status === 'degraded').length ?? 0;
   const totalCount = agents?.length ?? 0;
 
-  const criticalAlerts = (activeAlerts ?? []).filter((a) => a.alert.severity === 'critical');
-  const warningAlerts = (activeAlerts ?? []).filter((a) => a.alert.severity === 'warning');
-  const urgentAlerts = [...criticalAlerts, ...warningAlerts];
+  function toggleSort(field: SortField) {
+    if (sortField === field) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDir('asc');
+    }
+  }
+
+  function SortIcon({ field }: { field: SortField }) {
+    if (sortField !== field) return null;
+    return sortDir === 'asc' ? (
+      <ChevronUp className="w-3 h-3" />
+    ) : (
+      <ChevronDown className="w-3 h-3" />
+    );
+  }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-          <p className="text-gray-400 text-sm mt-1">
-            Monitoring {totalCount} agent{totalCount !== 1 ? 's' : ''}
-          </p>
+    <div className="p-6">
+      {/* Top stats bar */}
+      <div className="flex items-center gap-6 mb-6">
+        <div className="flex items-center gap-2">
+          <span className="text-2xl font-bold text-white">{totalCount}</span>
+          <span className="text-sm text-gray-400">
+            Device{totalCount !== 1 ? 's' : ''}
+          </span>
+        </div>
+        <div className="h-8 w-px bg-gray-800" />
+        <div className="flex items-center gap-4 text-sm">
+          <span className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            <span className="text-gray-300">{onlineCount} Online</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-red-400" />
+            <span className="text-gray-300">{offlineCount} Offline</span>
+          </span>
+          {degradedCount > 0 && (
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-yellow-400" />
+              <span className="text-gray-300">{degradedCount} Degraded</span>
+            </span>
+          )}
+        </div>
+        <div className="h-8 w-px bg-gray-800" />
+        <Link
+          to="/alerts"
+          className={clsx(
+            'flex items-center gap-1.5 text-sm no-underline',
+            (alertSummary?.totalUnresolved ?? 0) > 0
+              ? 'text-yellow-400'
+              : 'text-gray-400'
+          )}
+        >
+          <AlertTriangle className="w-4 h-4" />
+          {alertSummary?.totalUnresolved ?? 0} Alert{(alertSummary?.totalUnresolved ?? 0) !== 1 ? 's' : ''}
+        </Link>
+
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={() => queryClient.invalidateQueries({ queryKey: ['agents'] })}
+            className="p-2 text-gray-400 hover:text-white rounded-md hover:bg-gray-800 transition-colors"
+            title="Refresh"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+          <Link
+            to="/settings"
+            className="flex items-center gap-1.5 bg-emerald-500 text-white px-3 py-1.5 rounded-md text-sm font-medium hover:bg-emerald-600 no-underline transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Add Device
+          </Link>
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <SummaryCard
-          icon={<Monitor className="w-5 h-5 text-emerald-400" />}
-          label="Online"
-          value={onlineCount}
-        />
-        <SummaryCard
-          icon={<Monitor className="w-5 h-5 text-red-400" />}
-          label="Offline"
-          value={offlineCount}
-        />
-        <SummaryCard
-          icon={<AlertTriangle className="w-5 h-5 text-yellow-400" />}
-          label="Unresolved Alerts"
-          value={alertSummary?.totalUnresolved ?? 0}
-        />
-        <SummaryCard
-          icon={<Shield className="w-5 h-5 text-blue-400" />}
-          label="Total Agents"
-          value={totalCount}
-        />
+      {/* Search and filters */}
+      <div className="flex items-center gap-3 mb-4">
+        <div className="relative flex-1 max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search devices..."
+            className="w-full bg-gray-900 border border-gray-800 rounded-md pl-9 pr-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600"
+          />
+        </div>
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="bg-gray-900 border border-gray-800 rounded-md px-3 py-2 text-sm text-gray-300"
+        >
+          <option value="">All statuses</option>
+          <option value="online">Online</option>
+          <option value="offline">Offline</option>
+          <option value="degraded">Degraded</option>
+        </select>
       </div>
 
-      {/* Critical Alerts Section */}
-      {urgentAlerts.length > 0 ? (
-        <div className="mb-8">
-          <h2 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
-            <AlertTriangle className="w-5 h-5 text-red-400" />
-            Active Alerts
-          </h2>
-          <div className="space-y-2">
-            {urgentAlerts.map(({ alert, agentName }) => (
-              <div
-                key={alert.id}
-                className={clsx(
-                  'bg-gray-900 rounded-lg p-4 flex items-center justify-between border-l-4',
-                  alert.severity === 'critical' && 'border-l-red-500',
-                  alert.severity === 'warning' && 'border-l-yellow-500',
-                )}
-              >
-                <div className="flex items-center gap-3 flex-1 min-w-0">
-                  <AlertTriangle
-                    className={clsx(
-                      'w-5 h-5 shrink-0',
-                      alert.severity === 'critical' ? 'text-red-400' : 'text-yellow-400',
-                    )}
-                  />
-                  <div className="min-w-0">
-                    <p className="text-white text-sm font-medium truncate">{alert.message}</p>
-                    <p className="text-gray-500 text-xs mt-0.5">
-                      {agentName ?? 'Unknown agent'} &middot; {getTimeAgo(new Date(alert.createdAt))}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0 ml-4">
-                  <span
-                    className={clsx(
-                      'px-2 py-0.5 rounded text-xs font-medium uppercase',
-                      alert.severity === 'critical' && 'bg-red-500/10 text-red-400',
-                      alert.severity === 'warning' && 'bg-yellow-500/10 text-yellow-400',
-                    )}
-                  >
-                    {alert.severity}
-                  </span>
-                  <button
-                    onClick={() =>
-                      api.alerts.resolve(alert.id).then(() => {
-                        queryClient.invalidateQueries({ queryKey: ['activeAlerts'] });
-                        queryClient.invalidateQueries({ queryKey: ['alertSummary'] });
-                      })
-                    }
-                    className="text-xs bg-gray-800 text-gray-300 px-3 py-1.5 rounded hover:bg-gray-700 transition-colors"
-                  >
-                    Resolve
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div className="mb-8 bg-gray-900 border border-gray-800 rounded-xl p-6 text-center">
-          <CheckCircle className="w-8 h-8 text-emerald-400 mx-auto mb-2" />
-          <p className="text-gray-400 text-sm">All clear — no active alerts</p>
-        </div>
-      )}
-
-      {/* Agent Grid */}
+      {/* Devices table */}
       {isLoading ? (
-        <div className="text-gray-400 text-center py-20">Loading agents...</div>
-      ) : agents && agents.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {agents.map((agent) => (
-            <AgentCard key={agent.id} agent={agent} />
-          ))}
+        <div className="text-gray-500 text-center py-20 text-sm">Loading devices...</div>
+      ) : filtered.length > 0 ? (
+        <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-800 text-gray-500 text-xs uppercase tracking-wider">
+                <th
+                  className="text-left px-4 py-3 cursor-pointer hover:text-gray-300 select-none"
+                  onClick={() => toggleSort('name')}
+                >
+                  <span className="flex items-center gap-1">
+                    Device <SortIcon field="name" />
+                  </span>
+                </th>
+                <th
+                  className="text-left px-4 py-3 cursor-pointer hover:text-gray-300 select-none"
+                  onClick={() => toggleSort('status')}
+                >
+                  <span className="flex items-center gap-1">
+                    Status <SortIcon field="status" />
+                  </span>
+                </th>
+                <th
+                  className="text-left px-4 py-3 cursor-pointer hover:text-gray-300 select-none"
+                  onClick={() => toggleSort('os')}
+                >
+                  <span className="flex items-center gap-1">
+                    OS <SortIcon field="os" />
+                  </span>
+                </th>
+                <th className="text-left px-4 py-3">Health</th>
+                <th
+                  className="text-left px-4 py-3 cursor-pointer hover:text-gray-300 select-none"
+                  onClick={() => toggleSort('lastSeen')}
+                >
+                  <span className="flex items-center gap-1">
+                    Last Seen <SortIcon field="lastSeen" />
+                  </span>
+                </th>
+                <th className="text-left px-4 py-3">Auto-Fix</th>
+                <th className="text-right px-4 py-3">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((agent) => (
+                <DeviceRow
+                  key={agent.id}
+                  agent={agent}
+                  actionMenu={actionMenu}
+                  setActionMenu={setActionMenu}
+                  onDelete={() => setDeleteConfirm(agent)}
+                  onNavigate={() => navigate(`/agents/${agent.id}`)}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : totalCount > 0 ? (
+        <div className="text-center py-16 bg-gray-900 border border-gray-800 rounded-lg">
+          <Search className="w-8 h-8 text-gray-600 mx-auto mb-3" />
+          <p className="text-gray-400 text-sm">No devices match your search</p>
         </div>
       ) : (
-        <div className="text-center py-20 bg-gray-900 rounded-xl border border-gray-800">
-          <Monitor className="w-12 h-12 text-gray-600 mx-auto mb-4" />
-          <h3 className="text-lg text-white mb-2">No agents registered</h3>
-          <p className="text-gray-400 text-sm">
+        <div className="text-center py-16 bg-gray-900 border border-gray-800 rounded-lg">
+          <Monitor className="w-10 h-10 text-gray-600 mx-auto mb-3" />
+          <h3 className="text-white font-medium mb-1">No devices registered</h3>
+          <p className="text-gray-500 text-sm mb-4">
             Install the agent on a machine to get started.
-            <br />
-            Check the <Link to="/settings" className="text-emerald-400 hover:underline">Settings</Link> page for installation instructions.
           </p>
+          <Link
+            to="/settings"
+            className="inline-flex items-center gap-1.5 bg-emerald-500 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-emerald-600 no-underline"
+          >
+            <Plus className="w-4 h-4" />
+            Add Device
+          </Link>
         </div>
+      )}
+
+      {/* Delete confirmation modal */}
+      {deleteConfirm && (
+        <DeleteModal
+          agent={deleteConfirm}
+          loading={deleteMutation.isPending}
+          onConfirm={() => deleteMutation.mutate(deleteConfirm.id)}
+          onCancel={() => setDeleteConfirm(null)}
+        />
       )}
     </div>
   );
 }
 
-function SummaryCard({ icon, label, value }: {
-  icon: React.ReactNode;
-  label: string;
-  value: number;
+function DeviceRow({
+  agent,
+  actionMenu,
+  setActionMenu,
+  onDelete,
+  onNavigate,
+}: {
+  agent: Agent;
+  actionMenu: string | null;
+  setActionMenu: (id: string | null) => void;
+  onDelete: () => void;
+  onNavigate: () => void;
 }) {
+  const lastSeen = agent.lastSeen ? getTimeAgo(new Date(agent.lastSeen)) : 'Never';
+
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-      <div className="flex items-center gap-3 mb-3">
-        {icon}
-        <span className="text-gray-400 text-sm">{label}</span>
-      </div>
-      <div className="text-3xl font-bold text-white">{value}</div>
-    </div>
+    <tr
+      className="border-b border-gray-800/50 hover:bg-gray-800/30 cursor-pointer transition-colors"
+      onClick={onNavigate}
+    >
+      <td className="px-4 py-3">
+        <div>
+          <span className="text-white font-medium">{agent.name}</span>
+          <span className="text-gray-500 text-xs block">{agent.hostname}</span>
+        </div>
+      </td>
+      <td className="px-4 py-3">
+        <StatusBadge status={agent.status} />
+      </td>
+      <td className="px-4 py-3 text-gray-300">
+        <span className="text-xs">{agent.os}</span>
+        <span className="text-gray-600 text-xs block">{agent.arch}</span>
+      </td>
+      <td className="px-4 py-3">
+        <HealthScore score={null} size="sm" />
+      </td>
+      <td className="px-4 py-3 text-gray-400 text-xs">{lastSeen}</td>
+      <td className="px-4 py-3">
+        {agent.autoRemediate ? (
+          <span className="text-emerald-400 text-xs">On</span>
+        ) : (
+          <span className="text-gray-600 text-xs">Off</span>
+        )}
+      </td>
+      <td className="px-4 py-3 text-right">
+        <div className="relative inline-block" onClick={(e) => e.stopPropagation()}>
+          <button
+            onClick={() => setActionMenu(actionMenu === agent.id ? null : agent.id)}
+            className="p-1.5 text-gray-500 hover:text-white rounded hover:bg-gray-700 transition-colors"
+          >
+            <MoreVertical className="w-4 h-4" />
+          </button>
+          {actionMenu === agent.id && (
+            <>
+              <div
+                className="fixed inset-0 z-40"
+                onClick={() => setActionMenu(null)}
+              />
+              <div className="absolute right-0 top-full mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 py-1 min-w-[140px]">
+                <Link
+                  to={`/agents/${agent.id}`}
+                  className="flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white no-underline"
+                  onClick={() => setActionMenu(null)}
+                >
+                  <Monitor className="w-3.5 h-3.5" />
+                  Details
+                </Link>
+                <Link
+                  to={`/agents/${agent.id}/console`}
+                  className="flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white no-underline"
+                  onClick={() => setActionMenu(null)}
+                >
+                  <Terminal className="w-3.5 h-3.5" />
+                  Console
+                </Link>
+                <div className="border-t border-gray-700 my-1" />
+                <button
+                  onClick={() => {
+                    setActionMenu(null);
+                    onDelete();
+                  }}
+                  className="flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 w-full text-left"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Delete
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </td>
+    </tr>
   );
 }
 
-function AgentCard({ agent }: { agent: Agent }) {
-  const timeAgo = agent.lastSeen
-    ? getTimeAgo(new Date(agent.lastSeen))
-    : 'Never';
+function DeleteModal({
+  agent,
+  loading,
+  onConfirm,
+  onCancel,
+}: {
+  agent: Agent;
+  loading: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const uninstallCmd = `systemctl stop ai-remote-agent && systemctl disable ai-remote-agent && rm -f /usr/local/bin/ai-remote-agent /etc/systemd/system/ai-remote-agent.service && rm -rf /etc/ai-remote-agent && systemctl daemon-reload`;
 
   return (
-    <Link
-      to={`/agents/${agent.id}`}
-      className="block bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-colors no-underline"
-    >
-      <div className="flex items-start justify-between mb-3">
-        <div>
-          <h3 className="text-white font-semibold">{agent.name}</h3>
-          <p className="text-gray-500 text-xs mt-0.5">{agent.hostname}</p>
-        </div>
-        <StatusBadge status={agent.status} />
-      </div>
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onCancel}>
+      <div
+        className="bg-gray-900 border border-gray-700 rounded-xl p-6 max-w-lg w-full mx-4 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-white font-semibold text-lg mb-2">Delete Device</h3>
+        <p className="text-gray-400 text-sm mb-4">
+          This will remove <span className="text-white font-medium">{agent.name}</span> ({agent.hostname}) from the dashboard, including all snapshots, alerts, and history. This cannot be undone.
+        </p>
 
-      <div className="flex items-center gap-4 text-xs text-gray-400">
-        <span>{agent.os}</span>
-        <span>{agent.arch}</span>
-        <span className="flex items-center gap-1">
-          <Clock className="w-3 h-3" />
-          {timeAgo}
-        </span>
-      </div>
-
-      {agent.autoRemediate && (
-        <div className="mt-3 flex items-center gap-1 text-xs text-emerald-400">
-          <Shield className="w-3 h-3" />
-          Auto-remediation enabled
+        <div className="bg-gray-800 rounded-lg p-4 mb-4">
+          <p className="text-gray-400 text-xs mb-2">
+            To also uninstall the agent from the machine, run:
+          </p>
+          <code className="text-red-300 text-xs break-all leading-relaxed block">
+            {uninstallCmd}
+          </code>
         </div>
-      )}
-    </Link>
+
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={loading}
+            className="px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-lg hover:bg-red-600 disabled:opacity-50 transition-colors"
+          >
+            {loading ? 'Deleting...' : 'Delete Device'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
