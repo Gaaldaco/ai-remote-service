@@ -339,9 +339,13 @@ const worker = new Worker(
       .where(eq(machineSnapshots.id, snapshotId));
 
     // 8. Create alerts for issues (with dedup)
-    for (const issue of analysis.issues) {
-      const alertType = mapCategoryToAlertType(issue.category);
+    // Only alert on warning and critical — info is noise
+    const alertableIssues = analysis.issues.filter((i) => i.severity !== "info");
 
+    for (const issue of alertableIssues) {
+      const alertType = mapIssueToAlertType(issue);
+
+      // Dedup by type + agent (not exact message, since messages contain changing values)
       const [existingAlert] = await db
         .select()
         .from(alerts)
@@ -349,14 +353,28 @@ const worker = new Worker(
           and(
             eq(alerts.agentId, agent.id),
             eq(alerts.type, alertType),
-            eq(alerts.message, issue.description),
+            eq(alerts.severity, issue.severity),
             eq(alerts.resolved, false)
           )
         )
         .limit(1);
 
       if (existingAlert) {
-        continue; // skip duplicate
+        // Update timestamp and latest message instead of creating a duplicate
+        await db
+          .update(alerts)
+          .set({
+            message: issue.description,
+            snapshotId,
+            details: {
+              suggestedCommand: issue.suggestedCommand,
+              matchedKbId: issue.matchesKnownPattern,
+              analyzedByAI: analysis.usedAI,
+              updatedAt: new Date().toISOString(),
+            },
+          })
+          .where(eq(alerts.id, existingAlert.id));
+        continue;
       }
 
       // Check for auto-remediation
@@ -416,13 +434,17 @@ worker.on("completed", (job) => {
   console.log(`[worker] Job ${job.id} completed`);
 });
 
-function mapCategoryToAlertType(
-  category: string
+function mapIssueToAlertType(
+  issue: Issue
 ): "service_down" | "high_cpu" | "high_memory" | "high_disk" | "security_issue" | "update_available" | "auth_failure" | "custom" {
-  switch (category) {
+  // Use the description to pick the right alert type within a category
+  switch (issue.category) {
     case "security":
+      if (issue.description.toLowerCase().includes("auth")) return "auth_failure";
       return "security_issue";
     case "performance":
+      if (issue.description.toLowerCase().includes("memory")) return "high_memory";
+      if (issue.description.toLowerCase().includes("disk")) return "high_disk";
       return "high_cpu";
     case "availability":
       return "service_down";
