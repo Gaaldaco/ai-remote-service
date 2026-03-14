@@ -207,10 +207,11 @@ Diagnostic (auto-runs, read-only):
 {"command": "the command", "reason": "what we're checking"}
 \`\`\`
 
-Fix (requires user approval):
+Fix (requires user approval) — MUST use process names, NEVER PIDs:
 \`\`\`suggest
-{"command": "the fix command", "reason": "how this fixes the issue"}
+{"command": "pkill -9 process-name", "reason": "how this fixes the issue"}
 \`\`\`
+NEVER suggest "kill -9 <number>". ALWAYS use "pkill -9 <process-name>" or "killall <process-name>" or "systemctl restart <service>".
 
 When fix is verified working, document the FULL diagnostic path — not just the final command:
 \`\`\`solution
@@ -404,6 +405,31 @@ ${kbEntries.map((k) => `- ${k.issuePattern}: ${k.solution}`).join("\n") || "None
     try {
       const solution = JSON.parse(solutionMatch[1]);
 
+      // Sanitize: reject solutions with hardcoded PIDs (kill -9 12345)
+      // Convert "kill -9 <pid>" to "pkill -9 <process>" if we can find the process name
+      let solutionCommand: string = solution.command;
+      if (/\bkill\b.*\b\d{3,}\b/.test(solutionCommand) && !/pkill|killall/.test(solutionCommand)) {
+        // Try to extract process name from the pattern or steps
+        const processHint = solution.pattern?.match(/(\S+)\s+(?:process|using|consuming)/i)?.[1]
+          || solution.steps?.find((s: any) => s.type === 'action')?.command?.match(/pkill.*\s+(\S+)/)?.[1];
+        if (processHint) {
+          solutionCommand = `pkill -9 ${processHint}`;
+          console.log(`[console] Sanitized PID-based kill → ${solutionCommand}`);
+        } else {
+          // Can't determine process name — store the approach description instead
+          solutionCommand = "Find and kill offending process by name";
+          console.log(`[console] Rejected PID-based kill, using generic solution`);
+        }
+      }
+
+      // Also sanitize steps if they contain hardcoded PIDs
+      const sanitizedSteps = (solution.steps ?? []).map((step: any) => {
+        if (step.command && /\bkill\b.*\b\d{3,}\b/.test(step.command) && !/pkill|killall/.test(step.command)) {
+          return { ...step, command: step.command.replace(/\bkill\s+(-\d+\s+)?\d{3,}/g, 'pkill $1<process-name>') };
+        }
+        return step;
+      });
+
       // Dedup check: look for existing KB entries for this agent with similar pattern
       const existingKbs = await db.select().from(knowledgeBase).where(
         eq(knowledgeBase.agentId, agentId)
@@ -421,8 +447,8 @@ ${kbEntries.map((k) => `- ${k.issuePattern}: ${k.solution}`).join("\n") || "None
       if (existingDup) {
         // Update existing instead of creating duplicate
         await db.update(knowledgeBase).set({
-          solution: solution.command,
-          solutionSteps: solution.steps ?? existingDup.solutionSteps,
+          solution: solutionCommand,
+          solutionSteps: sanitizedSteps.length > 0 ? sanitizedSteps : existingDup.solutionSteps,
           description: solution.description ?? existingDup.description,
           updatedAt: new Date(),
         }).where(eq(knowledgeBase.id, existingDup.id));
@@ -434,8 +460,8 @@ ${kbEntries.map((k) => `- ${k.issuePattern}: ${k.solution}`).join("\n") || "None
           issuePattern: solution.pattern,
           issueCategory: "console",
           platform: agent?.platform ?? "linux",
-          solution: solution.command,
-          solutionSteps: solution.steps ?? null,
+          solution: solutionCommand,
+          solutionSteps: sanitizedSteps.length > 0 ? sanitizedSteps : null,
           description: solution.description,
           autoApply: autopilot ? true : false,
         });
@@ -471,6 +497,20 @@ ${kbEntries.map((k) => `- ${k.issuePattern}: ${k.solution}`).join("\n") || "None
   if (resolvedMatch) {
     try {
       resolved = JSON.parse(resolvedMatch[1]);
+
+      // Actually resolve all unresolved alerts for this agent
+      const unresolvedAlerts = await db
+        .select()
+        .from(alerts)
+        .where(and(eq(alerts.agentId, agentId), eq(alerts.resolved, false)));
+
+      if (unresolvedAlerts.length > 0) {
+        await db
+          .update(alerts)
+          .set({ resolved: true })
+          .where(and(eq(alerts.agentId, agentId), eq(alerts.resolved, false)));
+        console.log(`[console] Resolved ${unresolvedAlerts.length} alert(s) for agent ${agentId}`);
+      }
     } catch {
       // ignore
     }
