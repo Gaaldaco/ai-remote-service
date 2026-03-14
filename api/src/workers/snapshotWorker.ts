@@ -10,7 +10,7 @@ import {
   remediationLog,
 } from "../db/schema.js";
 import { eq, desc, and, or } from "drizzle-orm";
-import { analyzeWithAI, generateDynamicRemediation } from "../lib/claude.js";
+import { analyzeWithAI, generateDynamicRemediation, diagnoseUpdateFailure } from "../lib/claude.js";
 
 const redisUrl =
   process.env.REDIS_URL || "redis://redis.railway.internal:6379";
@@ -187,7 +187,7 @@ function analyzeLocally(
       category: "update",
       severity: updates.length > 10 ? "warning" : "info",
       description: `${updates.length} pending package update(s)`,
-      suggestedCommand: "DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' 2>&1 | tail -5",
+      suggestedCommand: "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' 2>&1 | tail -30",
       matchesKnownPattern: findKbMatch("pending update", kbEntries),
     });
     if (updates.length > 10) healthScore -= 5;
@@ -543,29 +543,79 @@ const worker = new Worker(
     // 9. Auto-update: if agent has autoUpdate enabled and there are pending updates
     const pendingUpdates = (snapshotData.pendingUpdates as any[]) ?? [];
     if (agent.autoUpdate && pendingUpdates.length > 0) {
-      // Only run once — check if we already queued an update command recently
-      const updateCmd = "DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' 2>&1 | tail -20";
-      const [recentUpdate] = await db
+      const UPDATE_CMD = "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' 2>&1 | tail -30";
+
+      // Check recent update attempts (last 6 hours)
+      const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
+      const recentUpdates = await db
         .select()
         .from(remediationLog)
-        .where(
-          and(
-            eq(remediationLog.agentId, agent.id),
-            eq(remediationLog.command, updateCmd)
-          )
-        )
+        .where(eq(remediationLog.agentId, agent.id))
         .orderBy(desc(remediationLog.executedAt))
-        .limit(1);
+        .limit(10);
 
-      // Only queue if no update was run in the last 24 hours
-      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      if (!recentUpdate || new Date(recentUpdate.executedAt) < oneDayAgo) {
+      const recentUpdateAttempts = recentUpdates.filter(
+        (r) =>
+          r.command.includes("apt-get upgrade") &&
+          new Date(r.executedAt) > sixHoursAgo
+      );
+
+      // Find the most recent update attempt
+      const lastUpdate = recentUpdateAttempts[0];
+
+      if (!lastUpdate) {
+        // No recent attempt — queue the update
         console.log(`[worker] Auto-update: queuing ${pendingUpdates.length} package updates on ${agent.hostname}`);
         await db.insert(remediationLog).values({
           agentId: agent.id,
-          command: updateCmd,
+          command: UPDATE_CMD,
         });
+      } else if (lastUpdate.success === false && lastUpdate.result) {
+        // Last update FAILED — use AI to diagnose and fix, then retry
+        console.log(`[worker] Auto-update failed on ${agent.hostname}, using AI to diagnose...`);
+
+        // Check if we already queued a fix for this failure
+        const alreadyFixing = recentUpdateAttempts.some(
+          (r) => !r.command.includes("apt-get upgrade") && r.success === null
+        );
+
+        if (!alreadyFixing) {
+          try {
+            const fixCmd = await diagnoseUpdateFailure(
+              lastUpdate.result,
+              agent.hostname,
+              agent.os
+            );
+
+            if (fixCmd) {
+              console.log(`[worker] AI fix for update failure: ${fixCmd}`);
+              // Queue the fix command
+              await db.insert(remediationLog).values({
+                agentId: agent.id,
+                command: fixCmd,
+              });
+              // Queue a retry of the update after the fix
+              await db.insert(remediationLog).values({
+                agentId: agent.id,
+                command: UPDATE_CMD,
+              });
+            }
+          } catch (err) {
+            console.error(`[worker] AI update diagnosis failed:`, err);
+          }
+        }
+      } else if (lastUpdate.success === true) {
+        // Last update succeeded — check again in 24h
+        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        if (new Date(lastUpdate.executedAt) < oneDayAgo) {
+          console.log(`[worker] Auto-update: re-queuing updates on ${agent.hostname} (24h since last success)`);
+          await db.insert(remediationLog).values({
+            agentId: agent.id,
+            command: UPDATE_CMD,
+          });
+        }
       }
+      // If lastUpdate.success === null, it's still pending — don't queue another
     }
 
     console.log(

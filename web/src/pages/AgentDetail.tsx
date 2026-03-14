@@ -8,7 +8,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts';
 import {
-  Cpu, HardDrive, MemoryStick, Activity, Pin, PinOff, Download, Search,
+  Cpu, HardDrive, MemoryStick, Activity, Pin, PinOff, Download, Search, ChevronDown, Check,
   Terminal, Shield, Clock, AlertTriangle, ArrowLeft, Trash2, Play, BookPlus, Loader2,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -24,6 +24,8 @@ export default function AgentDetail() {
   const [uninstallStatus, setUninstallStatus] = useState<'idle' | 'running' | 'success' | 'failed'>('idle');
   const [uninstallOutput, setUninstallOutput] = useState<string | null>(null);
   const [serviceSearch, setServiceSearch] = useState('');
+  const [showUpdateMenu, setShowUpdateMenu] = useState(false);
+  const [forceUpdateStatus, setForceUpdateStatus] = useState<'idle' | 'running' | 'success' | 'failed'>('idle');
   const queryClient = useQueryClient();
 
   const { data: agent } = useQuery({
@@ -160,18 +162,70 @@ export default function AgentDetail() {
               <Shield className="w-4 h-4" />
               Auto-Fix {agent.autoRemediate ? 'On' : 'Off'}
             </button>
-            <button
-              onClick={() => toggleAutoUpdate.mutate()}
-              className={clsx(
-                'px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5',
-                agent.autoUpdate
-                  ? 'bg-blue-500/10 text-blue-400 hover:bg-blue-500/20'
-                  : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+            <div className="relative">
+              <div className="flex">
+                <button
+                  onClick={() => toggleAutoUpdate.mutate()}
+                  className={clsx(
+                    'px-3 py-1.5 rounded-l-md text-sm font-medium transition-colors flex items-center gap-1.5',
+                    agent.autoUpdate
+                      ? 'bg-blue-500/10 text-blue-400 hover:bg-blue-500/20'
+                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                  )}
+                >
+                  <Download className="w-4 h-4" />
+                  Auto-Update {agent.autoUpdate ? 'On' : 'Off'}
+                </button>
+                <button
+                  onClick={() => setShowUpdateMenu(!showUpdateMenu)}
+                  className={clsx(
+                    'px-1.5 py-1.5 rounded-r-md text-sm font-medium transition-colors border-l',
+                    agent.autoUpdate
+                      ? 'bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 border-blue-500/20'
+                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700 border-gray-700'
+                  )}
+                >
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              {showUpdateMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowUpdateMenu(false)} />
+                  <div className="absolute right-0 top-full mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 py-1 min-w-[180px]">
+                    <button
+                      onClick={async () => {
+                        setShowUpdateMenu(false);
+                        setForceUpdateStatus('running');
+                        try {
+                          await api.console.execute(
+                            agent.id,
+                            "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' 2>&1 | tail -30"
+                          );
+                          setForceUpdateStatus('success');
+                          setTimeout(() => setForceUpdateStatus('idle'), 3000);
+                        } catch {
+                          setForceUpdateStatus('failed');
+                          setTimeout(() => setForceUpdateStatus('idle'), 3000);
+                        }
+                      }}
+                      disabled={forceUpdateStatus === 'running'}
+                      className="flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white w-full text-left disabled:opacity-50"
+                    >
+                      {forceUpdateStatus === 'running' ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : forceUpdateStatus === 'success' ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <Play className="w-3.5 h-3.5" />
+                      )}
+                      {forceUpdateStatus === 'running' ? 'Updating...' :
+                       forceUpdateStatus === 'success' ? 'Update Queued' :
+                       'Force Update Now'}
+                    </button>
+                  </div>
+                </>
               )}
-            >
-              <Download className="w-4 h-4" />
-              Auto-Update {agent.autoUpdate ? 'On' : 'Off'}
-            </button>
+            </div>
             <button
               onClick={() => setShowDelete(true)}
               className="p-1.5 text-gray-500 hover:text-red-400 rounded-md hover:bg-red-500/10 transition-colors"

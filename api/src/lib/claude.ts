@@ -242,3 +242,64 @@ Respond with ONLY the command (no explanation, no markdown):`;
     return null;
   }
 }
+
+/**
+ * Diagnose a failed apt-get update/upgrade and return a fix command.
+ * Common issues: stale package lists, broken repos, dpkg locks, dependency conflicts.
+ */
+export async function diagnoseUpdateFailure(
+  errorOutput: string,
+  hostname: string,
+  os: string
+): Promise<string | null> {
+  if (!client) return null;
+
+  const prompt = `You are a Linux sysadmin. An automatic "apt-get update && apt-get upgrade" failed on ${hostname} (${os}).
+
+## Error output:
+${errorOutput}
+
+## Your task:
+Return a SINGLE shell command that fixes the root cause so the update can succeed on retry.
+
+Common fixes:
+- "apt-get update" alone if package lists are stale (404 Not Found)
+- "apt-get update --fix-missing" for missing archives
+- "dpkg --configure -a" for interrupted dpkg
+- "apt-get install -f" for broken dependencies
+- "sed -i" to fix/remove broken repo entries in /etc/apt/sources.list.d/
+- "apt-get clean && apt-get update" for corrupted cache
+
+RULES:
+- Return ONLY the command. No explanation, no markdown.
+- The command must be non-interactive (no prompts)
+- NEVER remove packages, NEVER run "rm -rf", NEVER reboot
+- If you can't determine a fix, respond with "SKIP"`;
+
+  try {
+    const response = await client.messages.create({
+      model: HAIKU_MODEL,
+      max_tokens: 200,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const text = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+
+    if (!text || text === "SKIP" || text.includes("SKIP")) {
+      console.log(`[claude] Could not diagnose update failure on ${hostname}`);
+      return null;
+    }
+
+    // Safety: reject dangerous commands
+    if (/rm\s+-rf|reboot|shutdown|mkfs|dd\s+if/.test(text)) {
+      console.warn(`[claude] Rejected dangerous update fix: ${text}`);
+      return null;
+    }
+
+    console.log(`[claude] Update fix for ${hostname}: ${text}`);
+    return text;
+  } catch (err) {
+    console.error(`[claude] Update diagnosis failed:`, err);
+    return null;
+  }
+}
