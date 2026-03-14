@@ -117,6 +117,7 @@ export interface Agent {
   status: 'online' | 'offline' | 'degraded';
   lastSeen: string | null;
   autoRemediate: boolean;
+  autoUpdate: boolean;
   snapshotInterval: number;
   createdAt: string;
   updatedAt?: string;

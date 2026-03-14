@@ -8,7 +8,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts';
 import {
-  Cpu, HardDrive, MemoryStick, Activity, Pin, PinOff,
+  Cpu, HardDrive, MemoryStick, Activity, Pin, PinOff, Download, Search,
   Terminal, Shield, Clock, AlertTriangle, ArrowLeft, Trash2, Play, BookPlus, Loader2,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -23,6 +23,7 @@ export default function AgentDetail() {
   const [showDelete, setShowDelete] = useState(false);
   const [uninstallStatus, setUninstallStatus] = useState<'idle' | 'running' | 'success' | 'failed'>('idle');
   const [uninstallOutput, setUninstallOutput] = useState<string | null>(null);
+  const [serviceSearch, setServiceSearch] = useState('');
   const queryClient = useQueryClient();
 
   const { data: agent } = useQuery({
@@ -68,6 +69,11 @@ export default function AgentDetail() {
 
   const toggleAutoRemediate = useMutation({
     mutationFn: () => api.agents.update(id!, { autoRemediate: !agent?.autoRemediate }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent', id] }),
+  });
+
+  const toggleAutoUpdate = useMutation({
+    mutationFn: () => api.agents.update(id!, { autoUpdate: !agent?.autoUpdate }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent', id] }),
   });
 
@@ -153,6 +159,18 @@ export default function AgentDetail() {
             >
               <Shield className="w-4 h-4" />
               Auto-Fix {agent.autoRemediate ? 'On' : 'Off'}
+            </button>
+            <button
+              onClick={() => toggleAutoUpdate.mutate()}
+              className={clsx(
+                'px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5',
+                agent.autoUpdate
+                  ? 'bg-blue-500/10 text-blue-400 hover:bg-blue-500/20'
+                  : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+              )}
+            >
+              <Download className="w-4 h-4" />
+              Auto-Update {agent.autoUpdate ? 'On' : 'Off'}
             </button>
             <button
               onClick={() => setShowDelete(true)}
@@ -276,6 +294,18 @@ export default function AgentDetail() {
 
       {tab === 'services' && (
         <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-800">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+              <input
+                type="text"
+                value={serviceSearch}
+                onChange={(e) => setServiceSearch(e.target.value)}
+                placeholder="Search services..."
+                className="w-full bg-gray-800 border border-gray-700 rounded-md pl-9 pr-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-600"
+              />
+            </div>
+          </div>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-800 text-gray-500 text-xs uppercase tracking-wider">
@@ -287,7 +317,9 @@ export default function AgentDetail() {
               </tr>
             </thead>
             <tbody>
-              {(allServices ?? []).map((svc) => {
+              {(allServices ?? []).filter((svc) =>
+                !serviceSearch || svc.name.toLowerCase().includes(serviceSearch.toLowerCase())
+              ).map((svc) => {
                 const mon = monitored?.find((m) => m.serviceName === svc.name);
                 return (
                   <tr key={svc.name} className="border-b border-gray-800/50 hover:bg-gray-800/30">

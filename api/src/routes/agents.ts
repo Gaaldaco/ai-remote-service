@@ -95,10 +95,11 @@ router.get("/:id", async (req, res) => {
 
 // Update agent settings
 router.patch("/:id", async (req, res) => {
-  const { name, autoRemediate, snapshotInterval } = req.body;
+  const { name, autoRemediate, autoUpdate, snapshotInterval } = req.body;
   const updates: Record<string, unknown> = { updatedAt: new Date() };
   if (name !== undefined) updates.name = name;
   if (autoRemediate !== undefined) updates.autoRemediate = autoRemediate;
+  if (autoUpdate !== undefined) updates.autoUpdate = autoUpdate;
   if (snapshotInterval !== undefined) updates.snapshotInterval = snapshotInterval;
 
   const [updated] = await db

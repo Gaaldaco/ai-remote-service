@@ -48,6 +48,7 @@ export const agents = pgTable("agents", {
   status: agentStatusEnum("status").notNull().default("offline"),
   lastSeen: timestamp("last_seen"),
   autoRemediate: boolean("auto_remediate").notNull().default(false),
+  autoUpdate: boolean("auto_update").notNull().default(true), // auto-install pending updates
   apiKeyHash: text("api_key_hash").notNull().unique(),
   snapshotInterval: integer("snapshot_interval").notNull().default(60), // seconds
   createdAt: timestamp("created_at").defaultNow().notNull(),

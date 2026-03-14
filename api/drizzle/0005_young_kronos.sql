@@ -1,0 +1,1 @@
+ALTER TABLE "agents" ADD COLUMN "auto_update" boolean DEFAULT true NOT NULL;

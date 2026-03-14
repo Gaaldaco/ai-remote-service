@@ -187,8 +187,8 @@ function analyzeLocally(
       category: "update",
       severity: updates.length > 10 ? "warning" : "info",
       description: `${updates.length} pending package update(s)`,
-      suggestedCommand: null,
-      matchesKnownPattern: null,
+      suggestedCommand: "DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' 2>&1 | tail -5",
+      matchesKnownPattern: findKbMatch("pending update", kbEntries),
     });
     if (updates.length > 10) healthScore -= 5;
   }
@@ -536,6 +536,34 @@ const worker = new Worker(
           alertId: alert.id,
           kbEntryId: matchedKb!.id,
           command: remediationCommand,
+        });
+      }
+    }
+
+    // 9. Auto-update: if agent has autoUpdate enabled and there are pending updates
+    const pendingUpdates = (snapshotData.pendingUpdates as any[]) ?? [];
+    if (agent.autoUpdate && pendingUpdates.length > 0) {
+      // Only run once — check if we already queued an update command recently
+      const updateCmd = "DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::='--force-confdef' -o Dpkg::Options::='--force-confold' 2>&1 | tail -20";
+      const [recentUpdate] = await db
+        .select()
+        .from(remediationLog)
+        .where(
+          and(
+            eq(remediationLog.agentId, agent.id),
+            eq(remediationLog.command, updateCmd)
+          )
+        )
+        .orderBy(desc(remediationLog.executedAt))
+        .limit(1);
+
+      // Only queue if no update was run in the last 24 hours
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      if (!recentUpdate || new Date(recentUpdate.executedAt) < oneDayAgo) {
+        console.log(`[worker] Auto-update: queuing ${pendingUpdates.length} package updates on ${agent.hostname}`);
+        await db.insert(remediationLog).values({
+          agentId: agent.id,
+          command: updateCmd,
         });
       }
     }
