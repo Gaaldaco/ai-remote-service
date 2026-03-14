@@ -38,23 +38,33 @@ export default function Alerts() {
 
   const handleBulkResolve = async () => {
     setBulkLoading(true);
-    await api.alerts.bulkResolve({
-      severity: severityFilter || undefined,
-    });
-    invalidateAll();
-    setBulkLoading(false);
+    try {
+      await api.alerts.bulkResolve({
+        severity: severityFilter || undefined,
+      });
+      invalidateAll();
+    } catch (err) {
+      console.error('Bulk resolve failed:', err);
+    } finally {
+      setBulkLoading(false);
+    }
   };
 
   const handleBulkDelete = async (target: 'resolved' | 'all') => {
     setBulkLoading(true);
-    if (target === 'all') {
-      await api.alerts.bulkDelete({ all: 'true' });
-    } else {
-      await api.alerts.bulkDelete({ resolved: 'true' });
+    try {
+      if (target === 'all') {
+        await api.alerts.bulkDelete({ all: 'true' });
+      } else {
+        await api.alerts.bulkDelete({ resolved: 'true' });
+      }
+      invalidateAll();
+    } catch (err) {
+      console.error('Bulk delete failed:', err);
+    } finally {
+      setBulkLoading(false);
+      setConfirmDelete(false);
     }
-    invalidateAll();
-    setBulkLoading(false);
-    setConfirmDelete(false);
   };
 
   const critCount = summary?.bySeverity.find((s) => s.severity === 'critical')?.unresolved ?? 0;

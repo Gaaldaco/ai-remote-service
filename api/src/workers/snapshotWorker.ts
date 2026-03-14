@@ -56,12 +56,20 @@ function analyzeLocally(
 
   // ── CPU ──
   const cpuUsage = snapshot.cpu?.usagePercent ?? 0;
+  const processes = (snapshot.processes as any[]) ?? [];
+  const topCpuProc = processes.length > 0
+    ? processes.reduce((top, p) => (p.cpu > (top?.cpu ?? 0) ? p : top), processes[0])
+    : null;
+
   if (cpuUsage >= THRESHOLDS.cpu.critical) {
+    const cpuCmd = topCpuProc
+      ? `kill -9 $(pgrep -f '${topCpuProc.name}' | head -5 | tr '\\n' ' ')  # kill top CPU hog: ${topCpuProc.name} (${topCpuProc.cpu}% CPU)`
+      : null;
     issues.push({
       category: "performance",
       severity: "critical",
-      description: `CPU usage critically high at ${cpuUsage.toFixed(1)}%`,
-      suggestedCommand: "top -b -n 1 -o %CPU | head -20",
+      description: `CPU critically high at ${cpuUsage.toFixed(1)}%${topCpuProc ? ` — top process: ${topCpuProc.name} (${topCpuProc.cpu}%)` : ""}`,
+      suggestedCommand: cpuCmd,
       matchesKnownPattern: findKbMatch("high cpu", kbEntries),
     });
     healthScore -= 30;
@@ -69,8 +77,8 @@ function analyzeLocally(
     issues.push({
       category: "performance",
       severity: "warning",
-      description: `CPU usage elevated at ${cpuUsage.toFixed(1)}%`,
-      suggestedCommand: "top -b -n 1 -o %CPU | head -20",
+      description: `CPU elevated at ${cpuUsage.toFixed(1)}%${topCpuProc ? ` — top process: ${topCpuProc.name} (${topCpuProc.cpu}%)` : ""}`,
+      suggestedCommand: null,
       matchesKnownPattern: findKbMatch("high cpu", kbEntries),
     });
     healthScore -= 10;
@@ -78,12 +86,19 @@ function analyzeLocally(
 
   // ── Memory ──
   const memUsage = snapshot.memory?.usagePercent ?? 0;
+  const topMemProc = processes.length > 0
+    ? processes.reduce((top, p) => (p.mem > (top?.mem ?? 0) ? p : top), processes[0])
+    : null;
+
   if (memUsage >= THRESHOLDS.memory.critical) {
+    const memCmd = topMemProc
+      ? `kill -9 $(pgrep -f '${topMemProc.name}' | head -5 | tr '\\n' ' ')  # kill top memory hog: ${topMemProc.name} (${topMemProc.mem}% MEM)`
+      : null;
     issues.push({
       category: "performance",
       severity: "critical",
-      description: `Memory usage critically high at ${memUsage.toFixed(1)}%`,
-      suggestedCommand: "ps aux --sort=-%mem | head -15",
+      description: `Memory critically high at ${memUsage.toFixed(1)}%${topMemProc ? ` — top process: ${topMemProc.name} (${topMemProc.mem}%)` : ""}`,
+      suggestedCommand: memCmd,
       matchesKnownPattern: findKbMatch("high memory", kbEntries),
     });
     healthScore -= 30;
@@ -91,8 +106,8 @@ function analyzeLocally(
     issues.push({
       category: "performance",
       severity: "warning",
-      description: `Memory usage elevated at ${memUsage.toFixed(1)}%`,
-      suggestedCommand: "ps aux --sort=-%mem | head -15",
+      description: `Memory elevated at ${memUsage.toFixed(1)}%${topMemProc ? ` — top process: ${topMemProc.name} (${topMemProc.mem}%)` : ""}`,
+      suggestedCommand: null,
       matchesKnownPattern: findKbMatch("high memory", kbEntries),
     });
     healthScore -= 10;
@@ -107,7 +122,7 @@ function analyzeLocally(
         category: "performance",
         severity: "critical",
         description: `Disk ${d.mountpoint} critically full at ${usage.toFixed(0)}%`,
-        suggestedCommand: `du -sh ${d.mountpoint}/* 2>/dev/null | sort -rh | head -10`,
+        suggestedCommand: `journalctl --vacuum-size=100M && find /var/log -name '*.gz' -delete && find /tmp -atime +7 -delete  # clean logs and temp files on ${d.mountpoint}`,
         matchesKnownPattern: findKbMatch("high disk", kbEntries),
       });
       healthScore -= 25;
@@ -116,7 +131,7 @@ function analyzeLocally(
         category: "performance",
         severity: "warning",
         description: `Disk ${d.mountpoint} usage elevated at ${usage.toFixed(0)}%`,
-        suggestedCommand: `du -sh ${d.mountpoint}/* 2>/dev/null | sort -rh | head -10`,
+        suggestedCommand: null,
         matchesKnownPattern: findKbMatch("high disk", kbEntries),
       });
       healthScore -= 5;
@@ -128,12 +143,21 @@ function analyzeLocally(
   const failures = authLogs.filter(
     (l: any) => l.success === false && !isPrivateIP(l.source)
   );
+  // Find the most common attacking IP
+  const attackIPs: Record<string, number> = {};
+  for (const f of failures) {
+    if (f.source) attackIPs[f.source] = (attackIPs[f.source] || 0) + 1;
+  }
+  const topAttackIP = Object.entries(attackIPs).sort((a, b) => b[1] - a[1])[0]?.[0];
+
   if (failures.length >= THRESHOLDS.authFailures.critical) {
     issues.push({
       category: "security",
       severity: "critical",
-      description: `${failures.length} authentication failures detected`,
-      suggestedCommand: "journalctl -u sshd --since '1 hour ago' --no-pager | tail -30",
+      description: `${failures.length} auth failures from external IPs${topAttackIP ? ` (top: ${topAttackIP})` : ""}`,
+      suggestedCommand: topAttackIP
+        ? `ufw deny from ${topAttackIP} && fail2ban-client set sshd banip ${topAttackIP}  # block top attacker`
+        : "fail2ban-client status sshd",
       matchesKnownPattern: findKbMatch("auth failure", kbEntries),
     });
     healthScore -= 20;
@@ -141,8 +165,8 @@ function analyzeLocally(
     issues.push({
       category: "security",
       severity: "warning",
-      description: `${failures.length} authentication failures detected`,
-      suggestedCommand: "journalctl -u sshd --since '1 hour ago' --no-pager | tail -30",
+      description: `${failures.length} auth failures from external IPs${topAttackIP ? ` (top: ${topAttackIP})` : ""}`,
+      suggestedCommand: null,
       matchesKnownPattern: findKbMatch("auth failure", kbEntries),
     });
     healthScore -= 5;

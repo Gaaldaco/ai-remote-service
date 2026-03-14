@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "../db/index.js";
-import { alerts, agents } from "../db/schema.js";
-import { eq, desc, and, sql } from "drizzle-orm";
+import { alerts, agents, remediationLog, knowledgeBase } from "../db/schema.js";
+import { eq, desc, and, sql, inArray } from "drizzle-orm";
 
 const router = Router();
 
@@ -72,11 +72,34 @@ router.delete("/bulk", async (req, res) => {
     if (agentId) conditions.push(eq(alerts.agentId, agentId as string));
   }
 
-  const query = conditions.length
-    ? db.delete(alerts).where(and(...conditions))
-    : db.delete(alerts); // delete all — no where clause
+  // First find the alert IDs we're about to delete
+  const toDeleteQuery = conditions.length
+    ? db.select({ id: alerts.id }).from(alerts).where(and(...conditions))
+    : db.select({ id: alerts.id }).from(alerts);
 
-  const deleted = await query.returning({ id: alerts.id });
+  const toDelete = await toDeleteQuery;
+  const ids = toDelete.map((a) => a.id);
+
+  if (ids.length === 0) {
+    res.json({ deleted: 0 });
+    return;
+  }
+
+  // Nullify FK references in remediation_log and knowledge_base before deleting
+  await db
+    .update(remediationLog)
+    .set({ alertId: null })
+    .where(inArray(remediationLog.alertId, ids));
+  await db
+    .update(knowledgeBase)
+    .set({ createdFromAlertId: null })
+    .where(inArray(knowledgeBase.createdFromAlertId, ids));
+
+  const deleteQuery = conditions.length
+    ? db.delete(alerts).where(and(...conditions))
+    : db.delete(alerts);
+
+  const deleted = await deleteQuery.returning({ id: alerts.id });
 
   res.json({ deleted: deleted.length });
 });
