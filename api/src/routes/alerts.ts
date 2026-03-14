@@ -58,22 +58,25 @@ router.delete("/bulk", async (req, res) => {
   const { resolved, agentId, all } = req.query;
 
   const conditions = [];
-  if (all !== "true") {
+
+  if (all === "true") {
+    // Delete everything (optionally scoped to agent)
+    if (agentId) conditions.push(eq(alerts.agentId, agentId as string));
+  } else if (resolved === "false") {
+    // Delete unresolved only
+    conditions.push(eq(alerts.resolved, false));
+    if (agentId) conditions.push(eq(alerts.agentId, agentId as string));
+  } else {
     // Default: only delete resolved alerts
     conditions.push(eq(alerts.resolved, true));
-  }
-  if (agentId) conditions.push(eq(alerts.agentId, agentId as string));
-  if (resolved === "false") {
-    // Override to delete unresolved
-    conditions.length = 0;
-    conditions.push(eq(alerts.resolved, false));
     if (agentId) conditions.push(eq(alerts.agentId, agentId as string));
   }
 
-  const deleted = await db
-    .delete(alerts)
-    .where(conditions.length ? and(...conditions) : undefined)
-    .returning({ id: alerts.id });
+  const query = conditions.length
+    ? db.delete(alerts).where(and(...conditions))
+    : db.delete(alerts); // delete all — no where clause
+
+  const deleted = await query.returning({ id: alerts.id });
 
   res.json({ deleted: deleted.length });
 });
