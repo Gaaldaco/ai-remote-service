@@ -382,7 +382,7 @@ function DeleteModal({
 }) {
   const [uninstallStatus, setUninstallStatus] = useState<'idle' | 'running' | 'success' | 'failed'>('idle');
   const [uninstallOutput, setUninstallOutput] = useState<string | null>(null);
-  const uninstallCmd = `systemctl stop ai-remote-agent && systemctl disable ai-remote-agent && rm -f /usr/local/bin/ai-remote-agent /etc/systemd/system/ai-remote-agent.service && rm -rf /etc/ai-remote-agent && systemctl daemon-reload`;
+  const uninstallCmd = `nohup bash -c 'sleep 3 && systemctl stop ai-remote-agent && systemctl disable ai-remote-agent && rm -f /usr/local/bin/ai-remote-agent /etc/systemd/system/ai-remote-agent.service && rm -rf /etc/ai-remote-agent && systemctl daemon-reload' >/dev/null 2>&1 & echo "Uninstall scheduled — agent will be removed in a few seconds"`;
 
   const handleUninstall = async () => {
     setUninstallStatus('running');

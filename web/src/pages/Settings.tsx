@@ -8,7 +8,7 @@ export default function Settings() {
 
   const installCommand = `curl -sSL ${API_URL}/install.sh -o /tmp/install.sh && bash /tmp/install.sh`;
   const updateCommand = `curl -sL https://github.com/Gaaldaco/ai-remote-service/releases/latest/download/ai-remote-agent-linux-amd64 -o /usr/local/bin/ai-remote-agent && chmod +x /usr/local/bin/ai-remote-agent && systemctl restart ai-remote-agent`;
-  const uninstallCommand = `systemctl stop ai-remote-agent && systemctl disable ai-remote-agent && rm -f /usr/local/bin/ai-remote-agent /etc/systemd/system/ai-remote-agent.service && rm -rf /etc/ai-remote-agent && systemctl daemon-reload && echo "Agent uninstalled successfully"`;
+  const uninstallCommand = `nohup bash -c 'sleep 3 && systemctl stop ai-remote-agent && systemctl disable ai-remote-agent && rm -f /usr/local/bin/ai-remote-agent /etc/systemd/system/ai-remote-agent.service && rm -rf /etc/ai-remote-agent && systemctl daemon-reload && echo "Agent uninstalled successfully"' >/dev/null 2>&1 & echo "Uninstall scheduled — agent will be removed in a few seconds"`;
 
   const handleCopy = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
