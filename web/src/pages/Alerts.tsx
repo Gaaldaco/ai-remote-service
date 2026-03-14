@@ -2,12 +2,14 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '@/lib/api';
-import { AlertTriangle, CheckCircle, Bell } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Bell, CheckCheck, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 
 export default function Alerts() {
   const [filter, setFilter] = useState<'all' | 'unresolved' | 'resolved'>('unresolved');
   const [severityFilter, setSeverityFilter] = useState<string>('');
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: alertsData, isLoading } = useQuery({
@@ -24,19 +26,47 @@ export default function Alerts() {
     queryFn: api.alerts.summary,
   });
 
-  const handleResolve = async (alertId: string) => {
-    await api.alerts.resolve(alertId);
+  const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ['alerts'] });
     queryClient.invalidateQueries({ queryKey: ['alertSummary'] });
+  };
+
+  const handleResolve = async (alertId: string) => {
+    await api.alerts.resolve(alertId);
+    invalidateAll();
+  };
+
+  const handleBulkResolve = async () => {
+    setBulkLoading(true);
+    await api.alerts.bulkResolve({
+      severity: severityFilter || undefined,
+    });
+    invalidateAll();
+    setBulkLoading(false);
+  };
+
+  const handleBulkDelete = async (target: 'resolved' | 'all') => {
+    setBulkLoading(true);
+    if (target === 'all') {
+      await api.alerts.bulkDelete({ all: 'true' });
+    } else {
+      await api.alerts.bulkDelete({ resolved: 'true' });
+    }
+    invalidateAll();
+    setBulkLoading(false);
+    setConfirmDelete(false);
   };
 
   const critCount = summary?.bySeverity.find((s) => s.severity === 'critical')?.unresolved ?? 0;
   const warnCount = summary?.bySeverity.find((s) => s.severity === 'warning')?.unresolved ?? 0;
   const infoCount = summary?.bySeverity.find((s) => s.severity === 'info')?.unresolved ?? 0;
+  const totalUnresolved = summary?.totalUnresolved ?? 0;
+  const unresolvedInView = (alertsData ?? []).filter((a) => !a.alert.resolved).length;
+  const resolvedInView = (alertsData ?? []).filter((a) => a.alert.resolved).length;
 
   return (
     <div className="p-6">
-      {/* Header with inline stats */}
+      {/* Header */}
       <div className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-4">
           <h1 className="text-xl font-bold text-white">Alerts</h1>
@@ -58,6 +88,51 @@ export default function Alerts() {
             )}
             {critCount === 0 && warnCount === 0 && infoCount === 0 && (
               <span className="text-gray-500">All clear</span>
+            )}
+          </div>
+        </div>
+
+        {/* Bulk actions */}
+        <div className="flex items-center gap-2">
+          {totalUnresolved > 0 && (
+            <button
+              onClick={handleBulkResolve}
+              disabled={bulkLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-50"
+            >
+              <CheckCheck className="w-3.5 h-3.5" />
+              Resolve All{severityFilter ? ` ${severityFilter}` : ''}
+            </button>
+          )}
+          <div className="relative">
+            <button
+              onClick={() => setConfirmDelete(!confirmDelete)}
+              disabled={bulkLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-gray-800 text-gray-400 hover:text-white disabled:opacity-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Clear
+            </button>
+            {confirmDelete && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setConfirmDelete(false)} />
+                <div className="absolute right-0 top-full mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 py-1 min-w-[180px]">
+                  <button
+                    onClick={() => handleBulkDelete('resolved')}
+                    className="flex items-center gap-2 px-3 py-2 text-xs text-gray-300 hover:bg-gray-700 w-full text-left"
+                  >
+                    <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                    Delete resolved
+                  </button>
+                  <button
+                    onClick={() => handleBulkDelete('all')}
+                    className="flex items-center gap-2 px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 w-full text-left"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete all alerts
+                  </button>
+                </div>
+              </>
             )}
           </div>
         </div>

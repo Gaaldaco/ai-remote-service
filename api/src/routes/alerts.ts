@@ -33,10 +33,49 @@ router.get("/", async (req, res) => {
   res.json(rows);
 });
 
-// Clear all alerts
-router.delete("/clear", async (_req, res) => {
-  await db.delete(alerts).where(eq(alerts.resolved, false));
-  res.json({ cleared: true });
+// Bulk resolve alerts
+router.patch("/bulk/resolve", async (req, res) => {
+  const { ids, agentId, severity, all } = req.body;
+
+  const conditions = [eq(alerts.resolved, false)];
+  if (ids && Array.isArray(ids) && ids.length > 0) {
+    conditions.push(sql`${alerts.id} = ANY(${ids})`);
+  }
+  if (agentId) conditions.push(eq(alerts.agentId, agentId));
+  if (severity) conditions.push(eq(alerts.severity, severity));
+
+  const updated = await db
+    .update(alerts)
+    .set({ resolved: true, resolvedAt: new Date(), resolvedBy: "user-bulk" })
+    .where(and(...conditions))
+    .returning({ id: alerts.id });
+
+  res.json({ resolved: updated.length });
+});
+
+// Bulk delete alerts (resolved only, or all with force flag)
+router.delete("/bulk", async (req, res) => {
+  const { resolved, agentId, all } = req.query;
+
+  const conditions = [];
+  if (all !== "true") {
+    // Default: only delete resolved alerts
+    conditions.push(eq(alerts.resolved, true));
+  }
+  if (agentId) conditions.push(eq(alerts.agentId, agentId as string));
+  if (resolved === "false") {
+    // Override to delete unresolved
+    conditions.length = 0;
+    conditions.push(eq(alerts.resolved, false));
+    if (agentId) conditions.push(eq(alerts.agentId, agentId as string));
+  }
+
+  const deleted = await db
+    .delete(alerts)
+    .where(conditions.length ? and(...conditions) : undefined)
+    .returning({ id: alerts.id });
+
+  res.json({ deleted: deleted.length });
 });
 
 // Alert summary (counts by severity)

@@ -39,6 +39,15 @@ export const api = {
     summary: () => request<AlertSummary>('/api/alerts/summary'),
     resolve: (id: string) =>
       request<Alert>(`/api/alerts/${id}/resolve`, { method: 'PATCH', body: JSON.stringify({ resolvedBy: 'user' }) }),
+    bulkResolve: (params: { ids?: string[]; agentId?: string; severity?: string }) =>
+      request<{ resolved: number }>('/api/alerts/bulk/resolve', { method: 'PATCH', body: JSON.stringify(params) }),
+    bulkDelete: (params?: { resolved?: string; agentId?: string; all?: string }) => {
+      const qs = new URLSearchParams();
+      if (params?.resolved) qs.set('resolved', params.resolved);
+      if (params?.agentId) qs.set('agentId', params.agentId);
+      if (params?.all) qs.set('all', params.all);
+      return request<{ deleted: number }>(`/api/alerts/bulk?${qs}`, { method: 'DELETE' });
+    },
   },
   services: {
     allForAgent: (agentId: string) =>
