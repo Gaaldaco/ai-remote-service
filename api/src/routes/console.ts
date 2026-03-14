@@ -192,12 +192,13 @@ router.post("/:agentId/ask", async (req, res) => {
   const autopilotInstructions = autopilot ? `
 ## AUTOPILOT MODE — You are driving the terminal to remediate an issue.
 Your workflow:
-1. Run DIAGNOSTIC commands to understand the root cause (logs, status, process lists)
-2. Once you understand the cause, suggest a FIX command (user must approve)
-3. After the fix runs, VERIFY it worked with another diagnostic
-4. If verified, document the solution AND mark resolved
-5. If the process looks like it could be intentional (stress tests, benchmarks, etc), ASK the user before killing it
+1. INVESTIGATE — run diagnostic commands to understand what's actually happening
+2. DIAGNOSE — identify the root cause from what you observe
+3. FIX — suggest a remediation command (user must approve)
+4. VERIFY — confirm the fix worked with another diagnostic
+5. DOCUMENT — record the FULL journey as a playbook, then mark resolved
 
+If the process looks like it could be intentional (stress tests, benchmarks, etc), ASK the user before killing it.
 NEVER run destructive commands: no rm -rf, no dd, no mkfs, no DROP, no reboot, no shutdown, no init 0.
 
 ## Command blocks — you MUST use these (one per response):
@@ -207,26 +208,36 @@ Diagnostic (auto-runs, read-only):
 {"command": "the command", "reason": "what we're checking"}
 \`\`\`
 
-Fix (requires user approval) — MUST use process names, NEVER PIDs:
+Fix (requires user approval):
 \`\`\`suggest
-{"command": "pkill -9 process-name", "reason": "how this fixes the issue"}
+{"command": "the fix command", "reason": "how this fixes the issue"}
 \`\`\`
-NEVER suggest "kill -9 <number>". ALWAYS use "pkill -9 <process-name>" or "killall <process-name>" or "systemctl restart <service>".
 
-When fix is verified working, document the FULL diagnostic path — not just the final command:
+## SOLUTION DOCUMENTATION — THIS IS CRITICAL
+When the fix is verified, you MUST document it as a PLAYBOOK — the full path you took from investigation to resolution. This playbook will be replayed automatically next time this issue occurs, so it must be complete and reusable.
+
 \`\`\`solution
-{"pattern": "issue description", "command": "summary of fix approach", "description": "explanation", "steps": [{"type": "diagnostic", "command": "the diagnostic command you ran", "reason": "why"}, {"type": "action", "command": "the fix command using process names", "reason": "why"}, {"type": "verify", "command": "the verification command", "reason": "how you confirmed it worked"}]}
+{
+  "pattern": "short issue description",
+  "command": "Human-readable summary of the approach, NOT a raw command",
+  "description": "what was wrong and how the playbook fixes it",
+  "steps": [
+    {"type": "diagnostic", "command": "first command you ran", "reason": "what you were looking for"},
+    {"type": "diagnostic", "command": "second command if needed", "reason": "narrowing down the cause"},
+    {"type": "action", "command": "the fix command", "reason": "why this fixes it"},
+    {"type": "verify", "command": "verification command", "reason": "how you confirmed it worked"}
+  ]
+}
 \`\`\`
 
-CRITICAL RULES for solution blocks:
-- "steps" MUST include the full path: diagnostics that identified the problem, the fix, and verification
-- "command" is a SUMMARY of the approach (e.g., "Find top CPU process and kill by name"), NOT a raw command
-- NEVER use hardcoded PIDs in any step — PIDs change every time
-- Use process names: "pkill -9 stress-ng" or "killall stress-ng", NOT "kill -9 218732"
-- Use "systemctl restart <service>" not "kill <pid>"
-- Steps will be replayed dynamically next time this issue occurs
+RULES for solution blocks:
+- "command" is a SUMMARY of the approach (e.g., "Check service status, identify failed dependency, restart service chain"). It is NOT a shell command.
+- "steps" is the playbook — every diagnostic, action, and verification you performed. Include ALL of them.
+- Every step command must be REUSABLE. Use generic identifiers (process names, service names), never instance-specific values (PIDs, timestamps, temp file paths).
+  Examples: "pkill -9 stress-ng" not "kill -9 218732", "systemctl restart nginx" not "kill 4521", "find /var/log -name '*.gz' -mtime +7 -delete" not "rm /var/log/specific-file.log"
+- The playbook will be re-executed on a different day with different state — every step must work in that future context.
 
-When the issue is fully resolved, emit this to close out:
+When the issue is fully resolved, emit this to close the alert:
 \`\`\`resolved
 {"summary": "what was wrong and how it was fixed"}
 \`\`\`
@@ -234,7 +245,7 @@ When the issue is fully resolved, emit this to close out:
 IMPORTANT RULES:
 - Run ONE command at a time, then wait for the output
 - ALWAYS use a code block (diagnostic or suggest) — never just describe a command
-- After a fix succeeds, ALWAYS verify with a diagnostic, then emit solution + resolved
+- After a fix succeeds, ALWAYS verify with a diagnostic, then emit BOTH solution AND resolved
 - Keep explanations brief (1-2 sentences max between commands)
 ` : "";
 
@@ -252,15 +263,20 @@ When you want to run a diagnostic that doesn't change anything, use:
 {"command": "the read-only command", "reason": "what we're checking"}
 \`\`\`
 
-When you've identified a working solution to document, include the diagnostic path:
+When you've identified a working solution, document it as a reusable playbook:
 \`\`\`solution
-{"pattern": "issue description", "command": "summary of fix approach", "description": "explanation", "steps": [{"type": "diagnostic", "command": "cmd", "reason": "why"}, {"type": "action", "command": "the fix", "reason": "why"}, {"type": "verify", "command": "cmd", "reason": "confirm"}]}
+{
+  "pattern": "short issue description",
+  "command": "Human-readable summary of the approach — NOT a shell command",
+  "description": "what was wrong and how to fix it",
+  "steps": [
+    {"type": "diagnostic", "command": "what to check first", "reason": "why"},
+    {"type": "action", "command": "the fix", "reason": "why"},
+    {"type": "verify", "command": "how to confirm", "reason": "what success looks like"}
+  ]
+}
 \`\`\`
-
-CRITICAL: In solution blocks:
-- "command" is a SUMMARY of the approach, not a raw command
-- "steps" must include the full diagnostic path that led to the fix
-- NEVER use hardcoded PIDs — use process names (pkill, killall, systemctl)
+The "steps" array is the full diagnostic path — it will be replayed automatically on future occurrences, so every command must be reusable (no hardcoded PIDs, timestamps, or temp paths).
 
 IMPORTANT SAFETY RULES:
 - NEVER suggest destructive commands (rm -rf /, dd, mkfs, format, DROP DATABASE, reboot, shutdown, halt, init 0)
