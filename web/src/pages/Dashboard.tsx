@@ -6,7 +6,7 @@ import StatusBadge from '@/components/StatusBadge';
 import HealthScore from '@/components/HealthScore';
 import {
   Monitor, AlertTriangle, Search, Terminal, Trash2,
-  ChevronUp, ChevronDown, MoreVertical, Plus, RefreshCw,
+  ChevronUp, ChevronDown, MoreVertical, Plus, RefreshCw, Loader2,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -380,7 +380,31 @@ function DeleteModal({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const [uninstallStatus, setUninstallStatus] = useState<'idle' | 'running' | 'success' | 'failed'>('idle');
+  const [uninstallOutput, setUninstallOutput] = useState<string | null>(null);
   const uninstallCmd = `systemctl stop ai-remote-agent && systemctl disable ai-remote-agent && rm -f /usr/local/bin/ai-remote-agent /etc/systemd/system/ai-remote-agent.service && rm -rf /etc/ai-remote-agent && systemctl daemon-reload`;
+
+  const handleUninstall = async () => {
+    setUninstallStatus('running');
+    setUninstallOutput(null);
+    try {
+      const { id: remId } = await api.console.execute(agent.id, uninstallCmd);
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const res = await api.console.result(agent.id, remId);
+        if (res.status === 'complete') {
+          setUninstallOutput(res.output ?? 'No output');
+          setUninstallStatus(res.success ? 'success' : 'failed');
+          return;
+        }
+      }
+      setUninstallStatus('failed');
+      setUninstallOutput('Timed out waiting for agent response');
+    } catch {
+      setUninstallStatus('failed');
+      setUninstallOutput('Failed to send command — agent may be offline');
+    }
+  };
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onCancel}>
@@ -388,33 +412,75 @@ function DeleteModal({
         className="bg-gray-900 border border-gray-700 rounded-xl p-6 max-w-lg w-full mx-4 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="text-white font-semibold text-lg mb-2">Delete Device</h3>
-        <p className="text-gray-400 text-sm mb-4">
-          This will remove <span className="text-white font-medium">{agent.name}</span> ({agent.hostname}) from the dashboard, including all snapshots, alerts, and history. This cannot be undone.
-        </p>
+        <h3 className="text-white font-semibold text-lg mb-4">Remove Device</h3>
 
-        <div className="bg-gray-800 rounded-lg p-4 mb-4">
-          <p className="text-gray-400 text-xs mb-2">
-            To also uninstall the agent from the machine, run:
+        {/* Step 1: Uninstall */}
+        <div className="bg-gray-800 rounded-lg p-4 mb-3">
+          <h4 className="text-white text-sm font-medium mb-1">1. Uninstall Agent</h4>
+          <p className="text-gray-500 text-xs mb-3">
+            Remotely stops, disables, and removes the agent from <span className="text-gray-300">{agent.hostname}</span>
           </p>
-          <code className="text-red-300 text-xs break-all leading-relaxed block">
-            {uninstallCmd}
-          </code>
+
+          {uninstallStatus === 'idle' && (
+            <button
+              onClick={handleUninstall}
+              className="w-full px-3 py-2 bg-orange-500 text-white text-sm font-medium rounded-md hover:bg-orange-600 transition-colors flex items-center justify-center gap-2"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Uninstall Agent from Machine
+            </button>
+          )}
+
+          {uninstallStatus === 'running' && (
+            <div className="flex items-center gap-2 text-yellow-400 text-sm py-2">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Uninstalling agent...
+            </div>
+          )}
+
+          {uninstallStatus === 'success' && (
+            <div className="text-sm">
+              <p className="text-emerald-400 font-medium mb-1">Agent uninstalled successfully</p>
+              {uninstallOutput && (
+                <pre className="text-gray-500 text-xs bg-gray-900 rounded p-2 max-h-20 overflow-auto">{uninstallOutput}</pre>
+              )}
+            </div>
+          )}
+
+          {uninstallStatus === 'failed' && (
+            <div className="text-sm">
+              <p className="text-red-400 font-medium mb-1">Uninstall failed or agent offline</p>
+              {uninstallOutput && (
+                <pre className="text-gray-500 text-xs bg-gray-900 rounded p-2 max-h-20 overflow-auto">{uninstallOutput}</pre>
+              )}
+              <p className="text-gray-500 text-xs mt-2">You can manually run on the machine:</p>
+              <code className="text-red-300 text-[11px] break-all leading-relaxed block mt-1">{uninstallCmd}</code>
+            </div>
+          )}
         </div>
 
-        <div className="flex justify-end gap-3">
+        {/* Step 2: Delete from dashboard */}
+        <div className="bg-gray-800 rounded-lg p-4 mb-4">
+          <h4 className="text-white text-sm font-medium mb-1">2. Delete from Dashboard</h4>
+          <p className="text-gray-500 text-xs mb-3">
+            Removes <span className="text-gray-300">{agent.name}</span> and all its data from the dashboard. Cannot be undone.
+          </p>
+          <button
+            onClick={onConfirm}
+            disabled={loading}
+            className="w-full px-3 py-2 bg-red-500 text-white text-sm font-medium rounded-md hover:bg-red-600 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            {loading ? 'Deleting...' : 'Delete Device from Dashboard'}
+          </button>
+        </div>
+
+        <div className="flex justify-end">
           <button
             onClick={onCancel}
             className="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors"
           >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={loading}
-            className="px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-lg hover:bg-red-600 disabled:opacity-50 transition-colors"
-          >
-            {loading ? 'Deleting...' : 'Delete Device'}
+            Close
           </button>
         </div>
       </div>

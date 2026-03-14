@@ -21,6 +21,8 @@ export default function AgentDetail() {
   const [tab, setTab] = useState<Tab>('overview');
   const [cmdInput, setCmdInput] = useState('');
   const [showDelete, setShowDelete] = useState(false);
+  const [uninstallStatus, setUninstallStatus] = useState<'idle' | 'running' | 'success' | 'failed'>('idle');
+  const [uninstallOutput, setUninstallOutput] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const { data: agent } = useQuery({
@@ -487,40 +489,112 @@ export default function AgentDetail() {
         </div>
       )}
 
-      {/* Delete modal */}
+      {/* Delete / Uninstall modal */}
       {showDelete && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowDelete(false)}>
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => { setShowDelete(false); setUninstallStatus('idle'); setUninstallOutput(null); }}>
           <div
             className="bg-gray-900 border border-gray-700 rounded-xl p-6 max-w-lg w-full mx-4 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-white font-semibold text-lg mb-2">Delete Device</h3>
-            <p className="text-gray-400 text-sm mb-4">
-              This will remove <span className="text-white font-medium">{agent.name}</span> ({agent.hostname}) from the dashboard, including all snapshots, alerts, and history.
-            </p>
+            <h3 className="text-white font-semibold text-lg mb-4">Remove Device</h3>
 
-            <div className="bg-gray-800 rounded-lg p-4 mb-4">
-              <p className="text-gray-400 text-xs mb-2">
-                To also uninstall the agent from the machine, run:
-              </p>
-              <code className="text-red-300 text-xs break-all leading-relaxed block">
-                {uninstallCmd}
-              </code>
+            {/* Step 1: Uninstall agent from machine */}
+            <div className="bg-gray-800 rounded-lg p-4 mb-3">
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <h4 className="text-white text-sm font-medium">1. Uninstall Agent</h4>
+                  <p className="text-gray-500 text-xs mt-0.5">
+                    Remotely stops, disables, and removes the agent from <span className="text-gray-300">{agent.hostname}</span>
+                  </p>
+                </div>
+              </div>
+
+              {uninstallStatus === 'idle' && (
+                <button
+                  onClick={async () => {
+                    setUninstallStatus('running');
+                    setUninstallOutput(null);
+                    try {
+                      const { id: remId } = await api.console.execute(agent.id, uninstallCmd);
+                      // Poll for result
+                      const poll = async () => {
+                        for (let i = 0; i < 30; i++) {
+                          await new Promise((r) => setTimeout(r, 2000));
+                          const res = await api.console.result(agent.id, remId);
+                          if (res.status === 'complete') {
+                            setUninstallOutput(res.output ?? 'No output');
+                            setUninstallStatus(res.success ? 'success' : 'failed');
+                            return;
+                          }
+                        }
+                        setUninstallStatus('failed');
+                        setUninstallOutput('Timed out waiting for agent response');
+                      };
+                      poll();
+                    } catch {
+                      setUninstallStatus('failed');
+                      setUninstallOutput('Failed to send command — agent may be offline');
+                    }
+                  }}
+                  className="w-full px-3 py-2 bg-orange-500 text-white text-sm font-medium rounded-md hover:bg-orange-600 transition-colors flex items-center justify-center gap-2"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Uninstall Agent from Machine
+                </button>
+              )}
+
+              {uninstallStatus === 'running' && (
+                <div className="flex items-center gap-2 text-yellow-400 text-sm py-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Uninstalling agent...
+                </div>
+              )}
+
+              {uninstallStatus === 'success' && (
+                <div className="text-sm">
+                  <p className="text-emerald-400 font-medium mb-1">Agent uninstalled successfully</p>
+                  {uninstallOutput && (
+                    <pre className="text-gray-500 text-xs bg-gray-900 rounded p-2 max-h-20 overflow-auto">{uninstallOutput}</pre>
+                  )}
+                </div>
+              )}
+
+              {uninstallStatus === 'failed' && (
+                <div className="text-sm">
+                  <p className="text-red-400 font-medium mb-1">Uninstall failed or agent offline</p>
+                  {uninstallOutput && (
+                    <pre className="text-gray-500 text-xs bg-gray-900 rounded p-2 max-h-20 overflow-auto">{uninstallOutput}</pre>
+                  )}
+                  <p className="text-gray-500 text-xs mt-2">
+                    You can manually uninstall by running on the machine:
+                  </p>
+                  <code className="text-red-300 text-[11px] break-all leading-relaxed block mt-1">{uninstallCmd}</code>
+                </div>
+              )}
             </div>
 
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={() => setShowDelete(false)}
-                className="px-4 py-2 text-sm text-gray-400 hover:text-white"
-              >
-                Cancel
-              </button>
+            {/* Step 2: Delete from dashboard */}
+            <div className="bg-gray-800 rounded-lg p-4 mb-4">
+              <h4 className="text-white text-sm font-medium mb-1">2. Delete from Dashboard</h4>
+              <p className="text-gray-500 text-xs mb-3">
+                Removes <span className="text-gray-300">{agent.name}</span> and all its data (snapshots, alerts, history) from the dashboard. This cannot be undone.
+              </p>
               <button
                 onClick={() => deleteMutation.mutate()}
                 disabled={deleteMutation.isPending}
-                className="px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-lg hover:bg-red-600 disabled:opacity-50"
+                className="w-full px-3 py-2 bg-red-500 text-white text-sm font-medium rounded-md hover:bg-red-600 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
               >
-                {deleteMutation.isPending ? 'Deleting...' : 'Delete Device'}
+                <Trash2 className="w-3.5 h-3.5" />
+                {deleteMutation.isPending ? 'Deleting...' : 'Delete Device from Dashboard'}
+              </button>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                onClick={() => { setShowDelete(false); setUninstallStatus('idle'); setUninstallOutput(null); }}
+                className="px-4 py-2 text-sm text-gray-400 hover:text-white"
+              >
+                Close
               </button>
             </div>
           </div>
