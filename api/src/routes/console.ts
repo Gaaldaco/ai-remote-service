@@ -190,29 +190,43 @@ router.post("/:agentId/ask", async (req, res) => {
 
   // Build system prompt with machine state baked in
   const autopilotInstructions = autopilot ? `
-## AUTOPILOT MODE — You are driving the terminal automatically.
+## AUTOPILOT MODE — You are driving the terminal to remediate an issue.
 Your workflow:
-1. Run DIAGNOSTIC commands first to understand the problem (logs, status checks, process lists)
-2. Once you understand the root cause, suggest a FIX command
-3. NEVER run destructive commands: no rm -rf, no dd, no mkfs, no format, no DROP, no reboot, no shutdown, no kill -9 on system processes
-4. Diagnostic commands auto-execute. Fix commands require user approval.
+1. Run DIAGNOSTIC commands to understand the root cause (logs, status, process lists)
+2. Once you understand the cause, suggest a FIX command (user must approve)
+3. After the fix runs, VERIFY it worked with another diagnostic
+4. If verified, document the solution AND mark resolved
+5. If the process looks like it could be intentional (stress tests, benchmarks, etc), ASK the user before killing it
 
-Use this block for diagnostic commands (will auto-run):
+NEVER run destructive commands: no rm -rf, no dd, no mkfs, no DROP, no reboot, no shutdown, no init 0.
+
+## Command blocks — you MUST use these (one per response):
+
+Diagnostic (auto-runs, read-only):
 \`\`\`diagnostic
-{"command": "the diagnostic command", "reason": "what we're checking"}
+{"command": "the command", "reason": "what we're checking"}
 \`\`\`
 
-Use this block for fix commands (requires user approval):
+Fix (requires user approval):
 \`\`\`suggest
 {"command": "the fix command", "reason": "how this fixes the issue"}
 \`\`\`
 
-When the fix works, document it:
+When fix is verified working, document it:
 \`\`\`solution
 {"pattern": "issue description", "command": "fix command", "description": "explanation"}
 \`\`\`
 
-Always explain what you're doing and what you found. Run ONE command at a time, then analyze the output before deciding next steps.
+When the issue is fully resolved, emit this to close out:
+\`\`\`resolved
+{"summary": "what was wrong and how it was fixed"}
+\`\`\`
+
+IMPORTANT RULES:
+- Run ONE command at a time, then wait for the output
+- ALWAYS use a code block (diagnostic or suggest) — never just describe a command
+- After a fix succeeds, ALWAYS verify with a diagnostic, then emit solution + resolved
+- Keep explanations brief (1-2 sentences max between commands)
 ` : "";
 
   const systemPrompt = `You are an AI sysadmin assistant connected to a live Linux terminal on "${agent?.hostname ?? "unknown"}".
@@ -409,7 +423,17 @@ ${kbEntries.map((k) => `- ${k.issuePattern}: ${k.solution}`).join("\n") || "None
     }
   }
 
-  res.json({ response: aiText, model, suggestion, diagnostic, sessionId: activeSessionId });
+  let resolved = null;
+  const resolvedMatch = aiText.match(/```resolved\n([\s\S]*?)\n```/);
+  if (resolvedMatch) {
+    try {
+      resolved = JSON.parse(resolvedMatch[1]);
+    } catch {
+      // ignore
+    }
+  }
+
+  res.json({ response: aiText, model, suggestion, diagnostic, resolved, sessionId: activeSessionId });
 });
 
 // ─── Session compression ────────────────────────────────────────────────────
