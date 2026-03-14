@@ -65,14 +65,22 @@ export async function analyzeWithAI(
     return null;
   }
 
-  const prompt = `You are analyzing CRITICAL issues on "${agentName}" (${agentHostname}, ${agentOS}).
+  const prompt = `You are a system health analyzer for an RMM (Remote Monitoring & Management) tool called "AI Remote RMM".
 
-The local rule-based analysis already detected these problems:
+## IMPORTANT CONTEXT — DO NOT flag these as threats:
+- The "ai-remote-agent" service running on this machine IS the legitimate monitoring agent for this RMM system. It is supposed to run as root.
+- Private/local IP addresses (10.x.x.x, 192.168.x.x, 172.16-31.x.x, 127.0.0.1) are legitimate admin/LAN traffic — NOT attackers.
+- Ports used by the RMM dashboard (typically 3000, 5000, or similar web ports) are part of this management system.
+- Failed SSH login attempts from private IPs followed by success = normal admin login with a typo, NOT a brute-force attack.
+
+## Machine: "${agentName}" (${agentHostname}, ${agentOS})
+
+## Rule-based analysis already found these issues:
 ${localAnalysis.issues.map((i) => `- [${i.severity}] ${i.category}: ${i.description}`).join("\n")}
 
 Local health score: ${localAnalysis.healthScore}/100
 
-## Snapshot Data (focus on the critical areas)
+## Snapshot Data
 ${JSON.stringify(snapshot, null, 2)}
 
 ## Monitored Services
@@ -81,20 +89,23 @@ ${monitoredServices.map((s) => `- ${s.serviceName}`).join("\n") || "None"}
 ## Known Solutions Database
 ${knowledgeEntries.map((k) => `[${k.id}] Pattern: "${k.issuePattern}" → Solution: "${k.solution}" (${k.successCount} successes, ${k.failureCount} failures)`).join("\n") || "Empty"}
 
-Provide a deeper analysis of the critical issues. Look for:
-1. Root cause — why are these services down or resources maxed out?
-2. Related issues the rules may have missed (e.g. a process causing both high CPU and a service crash)
-3. Better remediation commands, especially if KB entries exist
+## Your job:
+1. Analyze ONLY the issues already detected above. Provide root-cause analysis and better remediation.
+2. You may COMBINE related issues (e.g. high CPU caused by a runaway process also crashing services) but do NOT invent new issues.
+3. Do NOT create alerts for things that are healthy or working normally.
+4. Do NOT flag the monitoring agent, private IPs, or the RMM's own ports as security threats.
+5. Keep descriptions SHORT and factual (under 150 chars). No narrative or speculation.
+6. Use the SAME categories as the rule-based system: "security", "performance", "availability", "update".
 
 Respond with ONLY valid JSON (no markdown):
 {
   "healthScore": <0-100>,
-  "summary": "<one paragraph focusing on the critical issues and root cause>",
+  "summary": "<one paragraph, factual root-cause analysis>",
   "issues": [
     {
       "category": "security|performance|availability|update",
       "severity": "info|warning|critical",
-      "description": "<what is wrong>",
+      "description": "<short factual description>",
       "suggestedCommand": "<remediation command or null>",
       "matchesKnownPattern": "<kb_entry_id or null>"
     }

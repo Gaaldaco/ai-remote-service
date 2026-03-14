@@ -123,9 +123,11 @@ function analyzeLocally(
     }
   }
 
-  // ── Auth failures ──
+  // ── Auth failures (exclude private/local IPs — those are legitimate admin access) ──
   const authLogs = (snapshot.authLogs as any[]) ?? [];
-  const failures = authLogs.filter((l: any) => l.success === false);
+  const failures = authLogs.filter(
+    (l: any) => l.success === false && !isPrivateIP(l.source)
+  );
   if (failures.length >= THRESHOLDS.authFailures.critical) {
     issues.push({
       category: "security",
@@ -196,6 +198,18 @@ function analyzeLocally(
     issues,
     usedAI: false,
   };
+}
+
+function isPrivateIP(ip: string | undefined | null): boolean {
+  if (!ip) return false;
+  return (
+    ip.startsWith("10.") ||
+    ip.startsWith("192.168.") ||
+    ip.startsWith("172.16.") || ip.startsWith("172.17.") || ip.startsWith("172.18.") ||
+    ip.startsWith("172.19.") || ip.startsWith("172.2") || ip.startsWith("172.30.") ||
+    ip.startsWith("172.31.") ||
+    ip === "127.0.0.1" || ip === "::1" || ip === "localhost"
+  );
 }
 
 function findKbMatch(

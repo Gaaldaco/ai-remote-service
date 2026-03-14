@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '@/lib/api';
-import { AlertTriangle, CheckCircle, Bell, CheckCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Bell, CheckCheck, Trash2, Play, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
 
 export default function Alerts() {
@@ -181,66 +181,72 @@ export default function Alerts() {
               </tr>
             </thead>
             <tbody>
-              {(alertsData ?? []).map(({ alert, agentName, agentHostname }) => (
-                <tr
-                  key={alert.id}
-                  className={clsx(
-                    'border-b border-gray-800/50',
-                    alert.resolved ? 'opacity-40' : 'hover:bg-gray-800/30'
-                  )}
-                >
-                  <td className="px-4 py-3">
-                    {alert.resolved ? (
-                      <CheckCircle className="w-4 h-4 text-emerald-400" />
-                    ) : (
-                      <AlertTriangle className={clsx(
-                        'w-4 h-4',
-                        alert.severity === 'critical' && 'text-red-400',
-                        alert.severity === 'warning' && 'text-yellow-400',
-                        alert.severity === 'info' && 'text-blue-400',
-                      )} />
+              {(alertsData ?? []).map(({ alert, agentName, agentHostname }) => {
+                const suggestedCmd = (alert.details as any)?.suggestedCommand;
+                return (
+                  <tr
+                    key={alert.id}
+                    className={clsx(
+                      'border-b border-gray-800/50',
+                      alert.resolved ? 'opacity-40' : 'hover:bg-gray-800/30'
                     )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="text-white text-xs font-medium block">
-                      {alert.type.replace(/_/g, ' ')}
-                    </span>
-                    <span className="text-gray-400 text-xs">{alert.message}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <Link
-                      to={`/agents/${alert.agentId}`}
-                      className="text-gray-300 text-xs hover:text-emerald-400 no-underline"
-                    >
-                      {agentName ?? 'Unknown'}
-                    </Link>
-                    <span className="text-gray-600 text-xs block">{agentHostname}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={clsx(
-                      'px-2 py-0.5 rounded text-xs font-medium',
-                      alert.severity === 'critical' && 'bg-red-500/10 text-red-400',
-                      alert.severity === 'warning' && 'bg-yellow-500/10 text-yellow-400',
-                      alert.severity === 'info' && 'bg-blue-500/10 text-blue-400',
-                    )}>
-                      {alert.severity}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-gray-500 text-xs">
-                    {new Date(alert.createdAt).toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    {!alert.resolved && (
-                      <button
-                        onClick={() => handleResolve(alert.id)}
-                        className="text-xs bg-gray-800 text-gray-300 px-2.5 py-1 rounded hover:bg-gray-700"
+                  >
+                    <td className="px-4 py-3">
+                      {alert.resolved ? (
+                        <CheckCircle className="w-4 h-4 text-emerald-400" />
+                      ) : (
+                        <AlertTriangle className={clsx(
+                          'w-4 h-4',
+                          alert.severity === 'critical' && 'text-red-400',
+                          alert.severity === 'warning' && 'text-yellow-400',
+                          alert.severity === 'info' && 'text-blue-400',
+                        )} />
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-white text-xs font-medium block">
+                        {alert.type.replace(/_/g, ' ')}
+                      </span>
+                      <span className="text-gray-400 text-xs">{alert.message}</span>
+                      {suggestedCmd && !alert.resolved && (
+                        <AlertRunCommand agentId={alert.agentId} alertId={alert.id} command={suggestedCmd} onDone={invalidateAll} />
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Link
+                        to={`/agents/${alert.agentId}`}
+                        className="text-gray-300 text-xs hover:text-emerald-400 no-underline"
                       >
-                        Resolve
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                        {agentName ?? 'Unknown'}
+                      </Link>
+                      <span className="text-gray-600 text-xs block">{agentHostname}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={clsx(
+                        'px-2 py-0.5 rounded text-xs font-medium',
+                        alert.severity === 'critical' && 'bg-red-500/10 text-red-400',
+                        alert.severity === 'warning' && 'bg-yellow-500/10 text-yellow-400',
+                        alert.severity === 'info' && 'bg-blue-500/10 text-blue-400',
+                      )}>
+                        {alert.severity}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-gray-500 text-xs">
+                      {new Date(alert.createdAt).toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {!alert.resolved && (
+                        <button
+                          onClick={() => handleResolve(alert.id)}
+                          className="text-xs bg-gray-800 text-gray-300 px-2.5 py-1 rounded hover:bg-gray-700"
+                        >
+                          Resolve
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -250,6 +256,55 @@ export default function Alerts() {
           <p className="text-gray-400 text-sm">No alerts match your filters</p>
         </div>
       )}
+    </div>
+  );
+}
+
+function AlertRunCommand({ agentId, alertId, command, onDone }: { agentId: string; alertId: string; command: string; onDone: () => void }) {
+  const [status, setStatus] = useState<'idle' | 'pending' | 'polling' | 'success' | 'failed'>('idle');
+  const [result, setResult] = useState<string | null>(null);
+
+  const run = async () => {
+    setStatus('pending');
+    try {
+      const entry = await api.remediation.manual(agentId, command, alertId);
+      setStatus('polling');
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        try {
+          const res = await api.console.result(agentId, entry.id);
+          if (res.success !== undefined && res.success !== null) {
+            clearInterval(poll);
+            setStatus(res.success ? 'success' : 'failed');
+            setResult(res.output ?? null);
+            onDone();
+          }
+        } catch { /* keep polling */ }
+        if (attempts > 60) { clearInterval(poll); setStatus('failed'); setResult('Timed out'); }
+      }, 2000);
+    } catch (err: any) { setStatus('failed'); setResult(err.message); }
+  };
+
+  return (
+    <div className="mt-1.5 flex items-center gap-2">
+      <code className="text-xs bg-gray-800 px-2 py-1 rounded text-gray-400 font-mono">{command}</code>
+      {status === 'idle' && (
+        <button onClick={run} className="shrink-0 flex items-center gap-1 px-2 py-1 rounded text-xs bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20">
+          <Play className="w-3 h-3" /> Run
+        </button>
+      )}
+      {(status === 'pending' || status === 'polling') && (
+        <span className="flex items-center gap-1 text-xs text-yellow-400"><Loader2 className="w-3 h-3 animate-spin" /> {status === 'pending' ? 'Sending...' : 'Waiting...'}</span>
+      )}
+      {status === 'success' && <span className="text-xs text-emerald-400">Success</span>}
+      {status === 'failed' && (
+        <>
+          <span className="text-xs text-red-400">Failed</span>
+          <button onClick={() => { setStatus('idle'); setResult(null); }} className="text-xs text-gray-500 hover:text-white">Retry</button>
+        </>
+      )}
+      {result && <span className="text-xs text-gray-500 truncate max-w-[200px]" title={result}>{result}</span>}
     </div>
   );
 }

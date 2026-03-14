@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type Snapshot, type MonitoredService } from '@/lib/api';
@@ -9,7 +9,7 @@ import {
 } from 'recharts';
 import {
   Cpu, HardDrive, MemoryStick, Activity, Pin, PinOff,
-  Terminal, Shield, Clock, AlertTriangle, ArrowLeft, Trash2,
+  Terminal, Shield, Clock, AlertTriangle, ArrowLeft, Trash2, Play, BookPlus, Loader2,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -246,7 +246,12 @@ export default function AgentDetail() {
                       <span className="font-medium text-xs uppercase">[{issue.category}]</span>{' '}
                       {issue.description}
                       {issue.suggestedCommand && (
-                        <code className="block mt-1.5 text-xs bg-gray-800 p-2 rounded">{issue.suggestedCommand}</code>
+                        <RunCommandButton
+                          agentId={id!}
+                          command={issue.suggestedCommand}
+                          issueCategory={issue.category}
+                          issueDescription={issue.description}
+                        />
                       )}
                     </div>
                   ))}
@@ -323,40 +328,55 @@ export default function AgentDetail() {
 
       {tab === 'alerts' && (
         <div className="space-y-2">
-          {(agentAlerts ?? []).map(({ alert }) => (
-            <div
-              key={alert.id}
-              className={clsx(
-                'p-3 rounded-md border text-sm flex items-start justify-between',
-                alert.resolved && 'opacity-40',
-                alert.severity === 'critical' && 'bg-red-500/5 border-red-500/20',
-                alert.severity === 'warning' && 'bg-yellow-500/5 border-yellow-500/20',
-                alert.severity === 'info' && 'bg-blue-500/5 border-blue-500/20',
-              )}
-            >
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <AlertTriangle className={clsx(
-                    'w-3.5 h-3.5',
-                    alert.severity === 'critical' && 'text-red-400',
-                    alert.severity === 'warning' && 'text-yellow-400',
-                    alert.severity === 'info' && 'text-blue-400',
-                  )} />
-                  <span className="text-white font-medium text-xs">{alert.type.replace(/_/g, ' ')}</span>
-                  <span className="text-gray-600 text-xs">{new Date(alert.createdAt).toLocaleString()}</span>
+          {(agentAlerts ?? []).map(({ alert }) => {
+            const suggestedCmd = (alert.details as any)?.suggestedCommand;
+            return (
+              <div
+                key={alert.id}
+                className={clsx(
+                  'p-3 rounded-md border text-sm',
+                  alert.resolved && 'opacity-40',
+                  alert.severity === 'critical' && 'bg-red-500/5 border-red-500/20',
+                  alert.severity === 'warning' && 'bg-yellow-500/5 border-yellow-500/20',
+                  alert.severity === 'info' && 'bg-blue-500/5 border-blue-500/20',
+                )}
+              >
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <AlertTriangle className={clsx(
+                        'w-3.5 h-3.5',
+                        alert.severity === 'critical' && 'text-red-400',
+                        alert.severity === 'warning' && 'text-yellow-400',
+                        alert.severity === 'info' && 'text-blue-400',
+                      )} />
+                      <span className="text-white font-medium text-xs">{alert.type.replace(/_/g, ' ')}</span>
+                      <span className="text-gray-600 text-xs">{new Date(alert.createdAt).toLocaleString()}</span>
+                    </div>
+                    <p className="text-gray-300 text-sm">{alert.message}</p>
+                  </div>
+                  {!alert.resolved && (
+                    <button
+                      onClick={() => api.alerts.resolve(alert.id).then(() => queryClient.invalidateQueries({ queryKey: ['alerts', id] }))}
+                      className="text-xs bg-gray-800 text-gray-300 px-2.5 py-1 rounded hover:bg-gray-700 shrink-0"
+                    >
+                      Resolve
+                    </button>
+                  )}
                 </div>
-                <p className="text-gray-300 text-sm">{alert.message}</p>
+                {suggestedCmd && !alert.resolved && (
+                  <RunCommandButton
+                    agentId={id!}
+                    command={suggestedCmd}
+                    alertId={alert.id}
+                    issueCategory={alert.type}
+                    issueDescription={alert.message}
+                    onDone={() => queryClient.invalidateQueries({ queryKey: ['alerts', id] })}
+                  />
+                )}
               </div>
-              {!alert.resolved && (
-                <button
-                  onClick={() => api.alerts.resolve(alert.id).then(() => queryClient.invalidateQueries({ queryKey: ['alerts', id] }))}
-                  className="text-xs bg-gray-800 text-gray-300 px-2.5 py-1 rounded hover:bg-gray-700 shrink-0"
-                >
-                  Resolve
-                </button>
-              )}
-            </div>
-          ))}
+            );
+          })}
           {(!agentAlerts || agentAlerts.length === 0) && (
             <p className="text-gray-500 text-center py-10 text-sm">No alerts</p>
           )}
@@ -508,6 +528,183 @@ function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string
         <span className="text-gray-500 text-xs">{label}</span>
       </div>
       <div className="text-white text-lg font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function RunCommandButton({
+  agentId,
+  command,
+  alertId,
+  issueCategory,
+  issueDescription,
+  onDone,
+}: {
+  agentId: string;
+  command: string;
+  alertId?: string;
+  issueCategory?: string;
+  issueDescription?: string;
+  onDone?: () => void;
+}) {
+  const [status, setStatus] = useState<'idle' | 'pending' | 'polling' | 'success' | 'failed'>('idle');
+  const [result, setResult] = useState<string | null>(null);
+  const [showKB, setShowKB] = useState(false);
+  const queryClient = useQueryClient();
+
+  const run = async () => {
+    setStatus('pending');
+    try {
+      const entry = await api.remediation.manual(agentId, command, alertId);
+      setStatus('polling');
+      // Poll for result
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        try {
+          const res = await api.console.result(agentId, entry.id);
+          if (res.success !== undefined && res.success !== null) {
+            clearInterval(poll);
+            setStatus(res.success ? 'success' : 'failed');
+            setResult(res.output ?? null);
+            queryClient.invalidateQueries({ queryKey: ['remediation', agentId] });
+            queryClient.invalidateQueries({ queryKey: ['alerts', agentId] });
+            onDone?.();
+          }
+        } catch { /* keep polling */ }
+        if (attempts > 60) {
+          clearInterval(poll);
+          setStatus('failed');
+          setResult('Timed out waiting for result');
+        }
+      }, 2000);
+    } catch (err: any) {
+      setStatus('failed');
+      setResult(err.message);
+    }
+  };
+
+  return (
+    <div className="mt-1.5">
+      <div className="flex items-center gap-2">
+        <code className="flex-1 text-xs bg-gray-800 p-2 rounded font-mono text-gray-300">{command}</code>
+        {status === 'idle' && (
+          <button
+            onClick={run}
+            className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20"
+          >
+            <Play className="w-3 h-3" /> Run
+          </button>
+        )}
+        {(status === 'pending' || status === 'polling') && (
+          <span className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 text-xs text-yellow-400">
+            <Loader2 className="w-3 h-3 animate-spin" /> {status === 'pending' ? 'Sending...' : 'Waiting...'}
+          </span>
+        )}
+        {status === 'success' && (
+          <div className="shrink-0 flex items-center gap-1">
+            <span className="px-2 py-0.5 rounded text-xs bg-emerald-500/10 text-emerald-400">Success</span>
+            <button
+              onClick={() => setShowKB(true)}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium bg-blue-500/10 text-blue-400 hover:bg-blue-500/20"
+              title="Save to Knowledge Base"
+            >
+              <BookPlus className="w-3 h-3" /> Save to KB
+            </button>
+          </div>
+        )}
+        {status === 'failed' && (
+          <div className="shrink-0 flex items-center gap-1">
+            <span className="px-2 py-0.5 rounded text-xs bg-red-500/10 text-red-400">Failed</span>
+            <button onClick={() => { setStatus('idle'); setResult(null); }} className="text-xs text-gray-500 hover:text-white">Retry</button>
+          </div>
+        )}
+      </div>
+      {result && (
+        <pre className="mt-1.5 bg-gray-800 p-2 rounded text-xs text-gray-400 overflow-auto max-h-32">{result}</pre>
+      )}
+      {showKB && (
+        <SaveToKBModal
+          command={command}
+          category={issueCategory ?? 'custom'}
+          description={issueDescription ?? ''}
+          onClose={() => setShowKB(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function SaveToKBModal({
+  command,
+  category,
+  description,
+  onClose,
+}: {
+  command: string;
+  category: string;
+  description: string;
+  onClose: () => void;
+}) {
+  const [pattern, setPattern] = useState(description);
+  const [solution, setSolution] = useState(command);
+  const [platform, setPlatform] = useState('linux');
+  const [autoApply, setAutoApply] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const queryClient = useQueryClient();
+
+  const save = async () => {
+    setSaving(true);
+    await api.knowledgeBase.create({
+      issuePattern: pattern,
+      issueCategory: category,
+      platform,
+      solution,
+      description: `Auto-saved from successful remediation`,
+      autoApply,
+    });
+    queryClient.invalidateQueries({ queryKey: ['knowledgeBase'] });
+    setSaving(false);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 max-w-lg w-full mx-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-white font-semibold text-lg mb-4">Save to Knowledge Base</h3>
+        <div className="space-y-3">
+          <div>
+            <label className="text-gray-400 text-xs block mb-1">Issue Pattern (what to match)</label>
+            <input value={pattern} onChange={(e) => setPattern(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm text-white" />
+          </div>
+          <div>
+            <label className="text-gray-400 text-xs block mb-1">Solution Command</label>
+            <input value={solution} onChange={(e) => setSolution(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm text-white font-mono" />
+          </div>
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="text-gray-400 text-xs block mb-1">Platform</label>
+              <select value={platform} onChange={(e) => setPlatform(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm text-white">
+                <option value="linux">Linux</option>
+                <option value="windows">Windows</option>
+                <option value="macos">macOS</option>
+              </select>
+            </div>
+            <div className="flex-1 flex items-end">
+              <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                <input type="checkbox" checked={autoApply} onChange={(e) => setAutoApply(e.target.checked)} className="rounded" />
+                Auto-apply in future
+              </label>
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 mt-5">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-400 hover:text-white">Cancel</button>
+          <button onClick={save} disabled={saving || !pattern || !solution} className="px-4 py-2 bg-emerald-500 text-white text-sm font-medium rounded-lg hover:bg-emerald-600 disabled:opacity-50">
+            {saving ? 'Saving...' : 'Save to KB'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
