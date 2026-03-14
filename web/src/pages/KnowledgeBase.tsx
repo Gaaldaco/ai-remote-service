@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type KBEntry } from '@/lib/api';
-import { BookOpen, Plus, Trash2, ToggleLeft, ToggleRight } from 'lucide-react';
+import { BookOpen, Plus, Trash2, ToggleLeft, ToggleRight, Pencil, Check, X } from 'lucide-react';
 import clsx from 'clsx';
 
 export default function KnowledgeBase() {
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const { data: entries, isLoading } = useQuery({
@@ -60,61 +61,19 @@ export default function KnowledgeBase() {
               </tr>
             </thead>
             <tbody>
-              {(entries ?? []).map((entry) => {
-                const total = entry.successCount + entry.failureCount;
-                const rate = total > 0 ? Math.round((entry.successCount / total) * 100) : null;
-
-                return (
-                  <tr key={entry.id} className="border-b border-gray-800/50 hover:bg-gray-800/30">
-                    <td className="px-4 py-3">
-                      <span className="text-white text-xs font-medium">{entry.issuePattern}</span>
-                      {entry.description && (
-                        <span className="text-gray-500 text-xs block mt-0.5">{entry.description}</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded">
-                        {entry.issueCategory}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <code className="text-emerald-400 text-xs">{entry.solution}</code>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-gray-400">
-                      {rate !== null ? (
-                        <span className={rate >= 70 ? 'text-emerald-400' : rate >= 40 ? 'text-yellow-400' : 'text-red-400'}>
-                          {rate}% ({total})
-                        </span>
-                      ) : (
-                        <span className="text-gray-600">-</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <button
-                        onClick={() => toggleAutoApply.mutate(entry)}
-                        className={clsx(
-                          'flex items-center gap-1 text-xs',
-                          entry.autoApply ? 'text-emerald-400' : 'text-gray-600'
-                        )}
-                      >
-                        {entry.autoApply ? (
-                          <ToggleRight className="w-4 h-4" />
-                        ) : (
-                          <ToggleLeft className="w-4 h-4" />
-                        )}
-                      </button>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => deleteMutation.mutate(entry.id)}
-                        className="text-gray-500 hover:text-red-400 p-1"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+              {(entries ?? []).map((entry) => (
+                editingId === entry.id ? (
+                  <EditRow key={entry.id} entry={entry} onClose={() => setEditingId(null)} />
+                ) : (
+                  <ViewRow
+                    key={entry.id}
+                    entry={entry}
+                    onEdit={() => setEditingId(entry.id)}
+                    onDelete={() => deleteMutation.mutate(entry.id)}
+                    onToggleAutoApply={() => toggleAutoApply.mutate(entry)}
+                  />
+                )
+              ))}
             </tbody>
           </table>
         </div>
@@ -128,6 +87,157 @@ export default function KnowledgeBase() {
         </div>
       )}
     </div>
+  );
+}
+
+function ViewRow({
+  entry,
+  onEdit,
+  onDelete,
+  onToggleAutoApply,
+}: {
+  entry: KBEntry;
+  onEdit: () => void;
+  onDelete: () => void;
+  onToggleAutoApply: () => void;
+}) {
+  const total = entry.successCount + entry.failureCount;
+  const rate = total > 0 ? Math.round((entry.successCount / total) * 100) : null;
+
+  return (
+    <tr className="border-b border-gray-800/50 hover:bg-gray-800/30">
+      <td className="px-4 py-3">
+        <span className="text-white text-xs font-medium">{entry.issuePattern}</span>
+        {entry.description && (
+          <span className="text-gray-500 text-xs block mt-0.5">{entry.description}</span>
+        )}
+      </td>
+      <td className="px-4 py-3">
+        <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded">
+          {entry.issueCategory}
+        </span>
+      </td>
+      <td className="px-4 py-3">
+        <code className="text-emerald-400 text-xs">{entry.solution}</code>
+      </td>
+      <td className="px-4 py-3 text-xs text-gray-400">
+        {rate !== null ? (
+          <span className={rate >= 70 ? 'text-emerald-400' : rate >= 40 ? 'text-yellow-400' : 'text-red-400'}>
+            {rate}% ({total})
+          </span>
+        ) : (
+          <span className="text-gray-600">-</span>
+        )}
+      </td>
+      <td className="px-4 py-3">
+        <button
+          onClick={onToggleAutoApply}
+          className={clsx(
+            'flex items-center gap-1 text-xs',
+            entry.autoApply ? 'text-emerald-400' : 'text-gray-600'
+          )}
+        >
+          {entry.autoApply ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
+        </button>
+      </td>
+      <td className="px-4 py-3 text-right">
+        <div className="flex items-center gap-1 justify-end">
+          <button onClick={onEdit} className="text-gray-500 hover:text-blue-400 p-1" title="Edit">
+            <Pencil className="w-3.5 h-3.5" />
+          </button>
+          <button onClick={onDelete} className="text-gray-500 hover:text-red-400 p-1" title="Delete">
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function EditRow({ entry, onClose }: { entry: KBEntry; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [form, setForm] = useState({
+    issuePattern: entry.issuePattern,
+    issueCategory: entry.issueCategory,
+    platform: entry.platform,
+    solution: entry.solution,
+    description: entry.description ?? '',
+    autoApply: entry.autoApply,
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: () => api.knowledgeBase.update(entry.id, form),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['knowledgeBase'] });
+      onClose();
+    },
+  });
+
+  return (
+    <tr className="border-b border-gray-800/50 bg-gray-800/20">
+      <td className="px-4 py-2">
+        <input
+          value={form.issuePattern}
+          onChange={(e) => setForm({ ...form, issuePattern: e.target.value })}
+          className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-white"
+        />
+        <input
+          value={form.description}
+          onChange={(e) => setForm({ ...form, description: e.target.value })}
+          placeholder="Description (optional)"
+          className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 mt-1"
+        />
+      </td>
+      <td className="px-4 py-2">
+        <select
+          value={form.issueCategory}
+          onChange={(e) => setForm({ ...form, issueCategory: e.target.value })}
+          className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
+        >
+          <option value="performance">Performance</option>
+          <option value="security">Security</option>
+          <option value="availability">Availability</option>
+          <option value="update">Update</option>
+          <option value="console">Console</option>
+        </select>
+      </td>
+      <td className="px-4 py-2">
+        <input
+          value={form.solution}
+          onChange={(e) => setForm({ ...form, solution: e.target.value })}
+          className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-emerald-400 font-mono"
+        />
+      </td>
+      <td className="px-4 py-2 text-xs text-gray-500">
+        {entry.successCount}S / {entry.failureCount}F
+      </td>
+      <td className="px-4 py-2">
+        <label className="flex items-center gap-1 text-xs text-gray-400 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={form.autoApply}
+            onChange={(e) => setForm({ ...form, autoApply: e.target.checked })}
+            className="rounded"
+          />
+          On
+        </label>
+      </td>
+      <td className="px-4 py-2 text-right">
+        <div className="flex items-center gap-1 justify-end">
+          <button
+            onClick={() => updateMutation.mutate()}
+            disabled={!form.issuePattern || !form.solution}
+            className="text-emerald-400 hover:text-emerald-300 p-1 disabled:opacity-50"
+            title="Save"
+          >
+            <Check className="w-4 h-4" />
+          </button>
+          <button onClick={onClose} className="text-gray-500 hover:text-white p-1" title="Cancel">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      </td>
+    </tr>
   );
 }
 

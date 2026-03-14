@@ -396,6 +396,7 @@ ${kbEntries.map((k) => `- ${k.issuePattern}: ${k.solution}`).join("\n") || "None
         platform: agent?.platform ?? "linux",
         solution: solution.command,
         description: solution.description,
+        autoApply: autopilot ? true : false, // auto-apply if created during autopilot
       });
       console.log(`[console] KB entry created: ${solution.pattern}`);
     } catch {

@@ -246,14 +246,31 @@ function isPrivateIP(ip: string | undefined | null): boolean {
 
 function findKbMatch(
   pattern: string,
-  kbEntries: Array<{ id: string; issuePattern: string }>
+  kbEntries: Array<{ id: string; issuePattern: string; issueCategory?: string }>
 ): string | null {
   const lower = pattern.toLowerCase();
-  const match = kbEntries.find((k) =>
+
+  // Direct substring match (original)
+  const direct = kbEntries.find((k) =>
     k.issuePattern.toLowerCase().includes(lower) ||
     lower.includes(k.issuePattern.toLowerCase())
   );
-  return match?.id ?? null;
+  if (direct) return direct.id;
+
+  // Word-overlap match — if 2+ significant words match, consider it a hit
+  const STOP_WORDS = new Set(["the", "a", "an", "is", "at", "on", "in", "to", "of", "and", "or", "for"]);
+  const patternWords = lower.split(/\W+/).filter((w) => w.length > 2 && !STOP_WORDS.has(w));
+
+  let bestMatch: { id: string; score: number } | null = null;
+  for (const kb of kbEntries) {
+    const kbWords = kb.issuePattern.toLowerCase().split(/\W+/).filter((w) => w.length > 2 && !STOP_WORDS.has(w));
+    const overlap = patternWords.filter((w) => kbWords.some((kw) => kw.includes(w) || w.includes(kw))).length;
+    if (overlap >= 2 && (!bestMatch || overlap > bestMatch.score)) {
+      bestMatch = { id: kb.id, score: overlap };
+    }
+  }
+
+  return bestMatch?.id ?? null;
 }
 
 // ─── Worker ─────────────────────────────────────────────────────────────────
@@ -405,6 +422,16 @@ const worker = new Worker(
         )
         .limit(1);
 
+      // Find matching KB entry for auto-remediation
+      const matchedKb = issue.matchesKnownPattern
+        ? kbEntries.find((k) => k.id === issue.matchesKnownPattern)
+        : null;
+
+      // Use KB solution command if issue has no suggestedCommand
+      const remediationCommand = issue.suggestedCommand || matchedKb?.solution || null;
+      const shouldAutoRemediate =
+        matchedKb?.autoApply && agent.autoRemediate && remediationCommand;
+
       if (existingAlert) {
         // Update timestamp and latest message instead of creating a duplicate
         await db
@@ -413,23 +440,42 @@ const worker = new Worker(
             message: issue.description,
             snapshotId,
             details: {
-              suggestedCommand: issue.suggestedCommand,
+              suggestedCommand: remediationCommand,
               matchedKbId: issue.matchesKnownPattern,
               analyzedByAI: analysis.usedAI,
               updatedAt: new Date().toISOString(),
             },
           })
           .where(eq(alerts.id, existingAlert.id));
+
+        // Auto-remediate even for existing alerts if we have a KB match
+        if (shouldAutoRemediate && remediationCommand) {
+          // Check if there's already a pending remediation for this alert
+          const [pendingRemediation] = await db
+            .select()
+            .from(remediationLog)
+            .where(
+              and(
+                eq(remediationLog.alertId, existingAlert.id),
+                eq(remediationLog.command, remediationCommand)
+              )
+            )
+            .limit(1);
+
+          if (!pendingRemediation) {
+            console.log(
+              `[worker] Auto-remediating existing alert: ${remediationCommand} on ${agent.hostname}`
+            );
+            await db.insert(remediationLog).values({
+              agentId: agent.id,
+              alertId: existingAlert.id,
+              kbEntryId: matchedKb!.id,
+              command: remediationCommand,
+            });
+          }
+        }
         continue;
       }
-
-      // Check for auto-remediation
-      const matchedKb = issue.matchesKnownPattern
-        ? kbEntries.find((k) => k.id === issue.matchesKnownPattern)
-        : null;
-
-      const shouldAutoRemediate =
-        matchedKb?.autoApply && agent.autoRemediate && issue.suggestedCommand;
 
       const [alert] = await db
         .insert(alerts)
@@ -440,7 +486,7 @@ const worker = new Worker(
           severity: issue.severity,
           message: issue.description,
           details: {
-            suggestedCommand: issue.suggestedCommand,
+            suggestedCommand: remediationCommand,
             matchedKbId: issue.matchesKnownPattern,
             autoRemediate: shouldAutoRemediate,
             analyzedByAI: analysis.usedAI,
@@ -448,16 +494,16 @@ const worker = new Worker(
         })
         .returning();
 
-      if (shouldAutoRemediate && issue.suggestedCommand) {
+      if (shouldAutoRemediate && remediationCommand) {
         console.log(
-          `[worker] Auto-remediating: ${issue.suggestedCommand} on ${agent.hostname}`
+          `[worker] Auto-remediating: ${remediationCommand} on ${agent.hostname}`
         );
 
         await db.insert(remediationLog).values({
           agentId: agent.id,
           alertId: alert.id,
           kbEntryId: matchedKb!.id,
-          command: issue.suggestedCommand,
+          command: remediationCommand,
         });
       }
     }
