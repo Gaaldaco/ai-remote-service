@@ -56,6 +56,7 @@ router.get("/", async (_req, res) => {
       status: agents.status,
       lastSeen: agents.lastSeen,
       autoRemediate: agents.autoRemediate,
+      autoUpdate: agents.autoUpdate,
       snapshotInterval: agents.snapshotInterval,
       createdAt: agents.createdAt,
     })
@@ -78,6 +79,7 @@ router.get("/:id", async (req, res) => {
       status: agents.status,
       lastSeen: agents.lastSeen,
       autoRemediate: agents.autoRemediate,
+      autoUpdate: agents.autoUpdate,
       snapshotInterval: agents.snapshotInterval,
       createdAt: agents.createdAt,
       updatedAt: agents.updatedAt,
